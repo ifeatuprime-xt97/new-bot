@@ -61,7 +61,7 @@ def main():
     application.add_handler(CommandHandler("confirm_investment", confirm_investment_command))
     application.add_handler(CommandHandler("confirm_withdrawal", confirm_withdrawal_command))
     
-    # Add callback query handler
+    # Add callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     
     # Add message handlers
@@ -73,6 +73,16 @@ def main():
     job_queue.run_daily(daily_profit_job, time=time(0, 0, 0))
     
     logger.info("Bot is starting...")
+    logger.info(f"Admin IDs configured: {ADMIN_USER_IDS}")
+    
+    # Initialize database
+    try:
+        from database import db
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+    
+    # Start bot
     application.run_polling(allowed_updates=["message", "callback_query"])
 
 if __name__ == '__main__':

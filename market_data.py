@@ -1,4 +1,6 @@
-
+"""
+Market data fetching and processing
+"""
 import logging
 import random
 from typing import Dict, Optional

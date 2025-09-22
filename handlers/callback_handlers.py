@@ -5,13 +5,13 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import InvestmentPlan, TECH_STOCKS, NON_TECH_STOCKS
+from config import InvestmentPlan, TECH_STOCKS, NON_TECH_STOCKS, ALL_STOCKS, ADMIN_USER_IDS
 from database import db
 from market_data import market
 from handlers.user_handlers import show_main_menu, get_random_wallet
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main callback query handler"""
+    """Main callback query handler - handles ALL callback queries"""
     query = update.callback_query
     await query.answer()
     
@@ -70,29 +70,35 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("buy_stock_"):
             await handle_stock_purchase(update, context, data)
         
+        elif data == "confirm_stock_payment":
+            await handle_stock_payment_confirmation(update, context)
+        
         # Withdrawal
         elif data.startswith("withdraw_"):
             await handle_withdrawal_options(update, context, data)
         
         # Live prices
-        elif data.startswith("live_crypto_"):
+        elif data.startswith("live_crypto"):
             await handle_live_crypto_prices(update, context, data)
         
-        elif data.startswith("live_stock_"):
+        elif data.startswith("live_stock"):
             await handle_live_stock_prices(update, context, data)
-
+        
+        # Admin callbacks
         elif data.startswith("admin_"):
             if user.id in ADMIN_USER_IDS:
-                from handlers.admin_handlers import handle_admin_callback, admin_command
-                if data == "admin_panel":
-                    await admin_command(update, context)
-                else:
-                    await handle_admin_callback(update, context, data)
+                await handle_admin_callbacks(update, context, data)
             else:
                 await query.message.edit_text(
                     "❌ You do not have permission to access the admin panel.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
                 )
+        
+        else:
+            await query.message.edit_text(
+                "❌ Unknown action. Returning to main menu.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
+            )
     
     except Exception as e:
         logging.error(f"Error in callback handler for '{data}': {e}")
@@ -100,6 +106,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             "❌ An error occurred. Please try again.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
         )
+
+async def handle_admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle all admin-related callbacks"""
+    from handlers.admin_handlers import handle_admin_callback, admin_command
+    
+    if data == "admin_panel":
+        await admin_command(update, context)
+    else:
+        await handle_admin_callback(update, context, data)
 
 async def show_invest_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show investment options menu"""
@@ -256,7 +271,7 @@ async def handle_crypto_selection(update: Update, context: ContextTypes.DEFAULT_
 💎 Cryptocurrency: {crypto.upper()}
 📈 Daily Return: {plan_info['daily_return'] * 100:.2f}%
 
-🔑 **PAYMENT DETAILS:**
+🔒 **PAYMENT DETAILS:**
 
 **Wallet Address:**
 `{wallet_address}`
@@ -282,6 +297,127 @@ Click the button below after sending: 👇
     """
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_stock_pages(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle stock page navigation"""
+    page = int(data.split("_")[-1])
+    stocks_per_page = 10
+    start_idx = page * stocks_per_page
+    
+    page_stocks = ALL_STOCKS[start_idx:start_idx + stocks_per_page]
+    
+    if not page_stocks:
+        await update.callback_query.message.edit_text("❌ No stocks found on this page.")
+        return
+    
+    # Get stock prices
+    stock_data = []
+    for ticker in page_stocks:
+        try:
+            price = market.get_current_stock_price(ticker)
+            stock_data.append((ticker, price))
+        except Exception as e:
+            logging.error(f"Error getting price for {ticker}: {e}")
+            stock_data.append((ticker, 0))
+    
+    text = f"📈 **STOCK INVESTMENT - Page {page + 1}**\n\n"
+    text += "Choose a stock to purchase:\n\n"
+    
+    keyboard = []
+    for ticker, price in stock_data:
+        if price > 0:
+            text += f"• **{ticker}**: ${price:.2f}\n"
+            keyboard.append([InlineKeyboardButton(f"{ticker} - ${price:.2f}", callback_data=f"buy_stock_{ticker}")])
+        else:
+            text += f"• **{ticker}**: Price unavailable\n"
+    
+    # Navigation buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"stocks_page_{page-1}"))
+    if start_idx + stocks_per_page < len(ALL_STOCKS):
+        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"stocks_page_{page+1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("🔙 Invest Menu", callback_data="invest_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_stock_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle stock purchase initiation"""
+    ticker = data.replace("buy_stock_", "")
+    
+    # Get current stock price
+    try:
+        current_price = market.get_current_stock_price(ticker)
+        if current_price <= 0:
+            raise ValueError("Invalid price")
+    except Exception as e:
+        logging.error(f"Error getting stock price: {e}")
+        await update.callback_query.message.edit_text(
+            f"❌ Unable to get current price for {ticker}. Please try again later.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="stocks_page_0")]])
+        )
+        return
+    
+    context.user_data['stock_to_buy'] = ticker
+    context.user_data['awaiting_stock_shares'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Back to Stocks", callback_data="stocks_page_0")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = f"""
+📊 **BUY {ticker.upper()} STOCK**
+
+💰 Current Price: ${current_price:.2f} per share
+
+Please reply with the number of shares you want to purchase:
+
+**Examples:**
+• 10 shares = ${current_price * 10:.2f}
+• 50 shares = ${current_price * 50:.2f}
+• 100 shares = ${current_price * 100:.2f}
+
+Enter number of shares below:
+    """
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_stock_payment_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stock payment confirmation button"""
+    stock_data = context.user_data.get('awaiting_stock_investment')
+    if not stock_data:
+        await update.callback_query.message.edit_text("❌ Stock investment session expired. Please start again.")
+        return
+    
+    keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="stocks_page_0")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = """
+💸 **STOCK PAYMENT CONFIRMATION**
+
+Please reply with the following information:
+
+**Format:**
+```
+Amount: $X,XXX
+Transaction ID: [your_tx_hash]
+```
+
+**Example:**
+```
+Amount: $5,000
+Transaction ID: 0x1234...abcd
+```
+
+This helps our admin verify your payment quickly!
+    """
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+    context.user_data['awaiting_stock_payment_details'] = True
 
 async def show_withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show withdrawal options"""
@@ -356,6 +492,55 @@ Select option below: 👇
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
+async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle withdrawal option selection"""
+    withdrawal_type = data.replace("withdraw_", "")
+    
+    if withdrawal_type == "custom":
+        context.user_data['awaiting_withdraw_amount'] = True
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="withdraw")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.message.edit_text(
+            "💸 **Custom Withdrawal Amount**\n\n"
+            "Please reply with the amount you want to withdraw:\n\n"
+            "**Examples:**\n"
+            "• 100\n"
+            "• 500.50\n"
+            "• 1000\n\n"
+            "**Note:** Minimum $10, maximum is your available balance.\n"
+            "Enter amount below:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Handle percentage withdrawals
+    withdraw_options = context.user_data.get('withdraw_options', {})
+    
+    if withdrawal_type in withdraw_options:
+        amount = withdraw_options[withdrawal_type]
+        
+        context.user_data['pending_withdrawal'] = {
+            'amount': amount,
+            'user_id': update.callback_query.from_user.id
+        }
+        
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="withdraw")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.message.edit_text(
+            f"💸 **Withdrawal Request: ${amount:,.2f}**\n\n"
+            "Please provide your USDT wallet address (TRC20 network only):\n\n"
+            "⚠️ **Important:**\n"
+            "• Only TRC20 USDT addresses accepted\n"
+            "• Double-check your address carefully\n"
+            "• Wrong address = permanent loss of funds\n\n"
+            "Send your wallet address below:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
 async def show_live_prices_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show live prices menu"""
     keyboard = [
@@ -379,6 +564,60 @@ Select an option below: 👇
     """
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_live_crypto_prices(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle live crypto prices display"""
+    try:
+        crypto_prices = market.get_top_crypto_prices(20)
+        
+        text = "💎 **LIVE CRYPTO PRICES**\n\n"
+        
+        for i, (crypto, price) in enumerate(crypto_prices.items(), 1):
+            change = f"{(price * 0.02 - 0.01):.2%}"  # Mock price change
+            emoji = "📈" if price > 1 else "📊"
+            text += f"{i}. **{crypto.replace('-', ' ').title()}** {emoji}\n"
+            text += f"   💰 ${price:,.4f} ({change})\n\n"
+        
+        text += "*Prices update every minute*"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="live_crypto_0")],
+            [InlineKeyboardButton("🔙 Live Prices", callback_data="live_prices")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+    
+    except Exception as e:
+        logging.error(f"Error showing crypto prices: {e}")
+        await update.callback_query.message.edit_text("❌ Error loading crypto prices. Please try again.")
+
+async def handle_live_stock_prices(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle live stock prices display"""
+    try:
+        stock_prices = market.get_stock_list_prices(ALL_STOCKS[:20])
+        
+        text = "📊 **LIVE STOCK PRICES**\n\n"
+        
+        for i, (ticker, price) in enumerate(stock_prices.items(), 1):
+            change = f"{(price * 0.01 - 0.005):.2%}"  # Mock price change
+            emoji = "📈" if price > 100 else "📊"
+            text += f"{i}. **{ticker}** {emoji}\n"
+            text += f"   💰 ${price:,.2f} ({change})\n\n"
+        
+        text += "*Prices update every minute during market hours*"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="live_stock_0")],
+            [InlineKeyboardButton("🔙 Live Prices", callback_data="live_prices")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+    
+    except Exception as e:
+        logging.error(f"Error showing stock prices: {e}")
+        await update.callback_query.message.edit_text("❌ Error loading stock prices. Please try again.")
 
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show leaderboard"""
@@ -423,94 +662,7 @@ async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
-# Add these functions to callback_handlers.py
 
-async def handle_stock_pages(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
-    """Handle stock page navigation"""
-    page = int(data.split("_")[-1])
-    stocks_per_page = 10
-    start_idx = page * stocks_per_page
-    
-    from config import ALL_STOCKS
-    page_stocks = ALL_STOCKS[start_idx:start_idx + stocks_per_page]
-    
-    if not page_stocks:
-        await update.callback_query.message.edit_text("❌ No stocks found on this page.")
-        return
-    
-    # Get stock prices
-    stock_data = []
-    for ticker in page_stocks:
-        try:
-            price = market.get_current_stock_price(ticker)
-            stock_data.append((ticker, price))
-        except:
-            stock_data.append((ticker, 0))
-    
-    text = f"📈 **STOCK INVESTMENT - Page {page + 1}**\n\n"
-    text += "Choose a stock to purchase:\n\n"
-    
-    keyboard = []
-    for ticker, price in stock_data:
-        if price > 0:
-            text += f"• **{ticker}**: ${price:.2f}\n"
-            keyboard.append([InlineKeyboardButton(f"{ticker} - ${price:.2f}", callback_data=f"buy_stock_{ticker}")])
-        else:
-            text += f"• **{ticker}**: Price unavailable\n"
-    
-    # Navigation buttons
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"stocks_page_{page-1}"))
-    if start_idx + stocks_per_page < len(ALL_STOCKS):
-        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"stocks_page_{page+1}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    
-    keyboard.append([InlineKeyboardButton("🔙 Invest Menu", callback_data="invest_menu")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
-
-async def handle_stock_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
-    """Handle stock purchase initiation"""
-    ticker = data.replace("buy_stock_", "")
-    
-    # Get current stock price
-    try:
-        current_price = market.get_current_stock_price(ticker)
-        if current_price <= 0:
-            raise ValueError("Invalid price")
-    except:
-        await update.callback_query.message.edit_text(
-            f"❌ Unable to get current price for {ticker}. Please try again later.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="stocks_page_0")]])
-        )
-        return
-    
-    context.user_data['stock_to_buy'] = ticker
-    context.user_data['awaiting_stock_shares'] = True
-    
-    keyboard = [[InlineKeyboardButton("🔙 Back to Stocks", callback_data="stocks_page_0")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    text = f"""
-📊 **BUY {ticker.upper()} STOCK**
-
-💰 Current Price: ${current_price:.2f} per share
-
-Please reply with the number of shares you want to purchase:
-
-**Examples:**
-• 10 shares = ${current_price * 10:.2f}
-• 50 shares = ${current_price * 50:.2f}
-• 100 shares = ${current_price * 100:.2f}
-
-Enter number of shares below:
-    """
-    
-    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user profile"""
     user = update.callback_query.from_user
@@ -605,7 +757,6 @@ Need more help? Contact support!
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
-# Additional handler functions would go here...
 async def handle_payment_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle payment confirmation button"""
     investment_data = context.user_data.get('awaiting_tx_details')
