@@ -1,134 +1,102 @@
-"""
-Market data fetching and processing
-"""
-import yfinance as yf
-import requests
+
 import logging
-from typing import List, Dict, Optional
-from config import ALL_STOCKS
+import random
+from typing import Dict, Optional
 
 class MarketDataManager:
     def __init__(self):
-        self.cache = {}
-        self.cache_timeout = 300  # 5 minutes
-    
-    def get_stock_info(self, tickers: List[str]) -> List[Dict]:
-        """Get stock information for multiple tickers"""
-        stocks_info = []
+        self.logger = logging.getLogger(__name__)
         
-        if not tickers:
-            return stocks_info
+        # Mock stock prices (replace with real API calls)
+        self.mock_stock_prices = {
+            'AAPL': 175.50, 'MSFT': 330.25, 'GOOGL': 140.75, 'AMZN': 145.80,
+            'NVDA': 420.15, 'TSLA': 245.60, 'META': 295.40, 'NFLX': 440.20,
+            'INTC': 45.30, 'AMD': 105.75, 'V': 240.80, 'JPM': 150.40,
+            'JNJ': 165.90, 'WMT': 155.70, 'PG': 145.25, 'MA': 380.60,
+            'HD': 320.45, 'UNH': 510.30, 'VZ': 38.75, 'DIS': 95.80
+        }
         
-        try:
-            # Batch fetch for efficiency
-            data = yf.Tickers(' '.join(tickers))
-            
-            for ticker in tickers:
-                try:
-                    info = data.tickers[ticker.upper()].info
-                    current_price = info.get('regularMarketPrice')
-                    previous_close = info.get('previousClose')
-                    
-                    if current_price and previous_close:
-                        price_change_percent = ((current_price - previous_close) / previous_close) * 100
-                        change_emoji = '▲' if price_change_percent >= 0 else '▼'
-                        price_change_text = f"{change_emoji} {price_change_percent:.2f}%"
-                    else:
-                        price_change_text = "N/A"
-                    
-                    stocks_info.append({
-                        'ticker': ticker,
-                        'name': info.get('shortName', ticker),
-                        'price': f"${current_price:,.2f}" if current_price else "N/A",
-                        'change': price_change_text,
-                        'raw_price': current_price
-                    })
-                except Exception as e:
-                    logging.error(f"Error fetching data for {ticker}: {e}")
-                    stocks_info.append({
-                        'ticker': ticker,
-                        'name': ticker,
-                        'price': "Error",
-                        'change': "N/A",
-                        'raw_price': 0
-                    })
-        
-        except Exception as e:
-            logging.error(f"Error in batch stock fetch: {e}")
-            # Fallback to individual fetches
-            for ticker in tickers:
-                stocks_info.append({
-                    'ticker': ticker,
-                    'name': ticker,
-                    'price': "Error",
-                    'change': "N/A",
-                    'raw_price': 0
-                })
-        
-        return stocks_info
+        # Mock crypto prices
+        self.mock_crypto_prices = {
+            'btc': 42500.00, 'eth': 2650.00, 'usdt': 1.00,
+            'sol': 95.50, 'ton': 2.45
+        }
     
     def get_current_stock_price(self, ticker: str) -> float:
-        """Get current price for a single stock"""
+        """Get current stock price"""
         try:
-            stock = yf.Ticker(ticker)
-            price = stock.info.get('regularMarketPrice', 0)
-            return float(price) if price else 0.0
+            # Add some random variation to make it realistic
+            base_price = self.mock_stock_prices.get(ticker.upper(), 100.0)
+            variation = random.uniform(-0.05, 0.05)  # ±5% variation
+            price = base_price * (1 + variation)
+            return round(price, 2)
         except Exception as e:
-            logging.error(f"Error fetching price for {ticker}: {e}")
+            self.logger.error(f"Error getting price for {ticker}: {e}")
             return 0.0
     
-    def calculate_stock_pnl(self, ticker: str, amount_invested: float, purchase_price: float) -> float:
-        """Calculate profit/loss for a stock position"""
+    def get_current_crypto_price(self, crypto: str) -> float:
+        """Get current crypto price"""
+        try:
+            base_price = self.mock_crypto_prices.get(crypto.lower(), 1.0)
+            if crypto.lower() == 'usdt':
+                return 1.00  # USDT is stable
+            
+            variation = random.uniform(-0.02, 0.02)  # ±2% variation
+            price = base_price * (1 + variation)
+            return round(price, 2)
+        except Exception as e:
+            self.logger.error(f"Error getting crypto price for {crypto}: {e}")
+            return 0.0
+    
+    def calculate_stock_pnl(self, ticker: str, invested_amount: float, purchase_price: float) -> float:
+        """Calculate stock P&L"""
         try:
             current_price = self.get_current_stock_price(ticker)
-            if current_price <= 0:
+            if current_price <= 0 or purchase_price <= 0:
                 return 0.0
             
-            shares = amount_invested / purchase_price
+            shares = invested_amount / purchase_price
             current_value = shares * current_price
-            return current_value - amount_invested
-        
+            pnl = current_value - invested_amount
+            return round(pnl, 2)
         except Exception as e:
-            logging.error(f"Error calculating P&L for {ticker}: {e}")
+            self.logger.error(f"Error calculating P&L for {ticker}: {e}")
             return 0.0
     
-    def get_crypto_prices(self, limit: int = 20) -> Optional[List[Dict]]:
-        """Get top cryptocurrency prices from CoinGecko"""
+    def get_top_crypto_prices(self, limit: int = 20) -> Dict[str, float]:
+        """Get top crypto prices"""
         try:
-            url = "https://api.coingecko.com/api/v3/coins/markets"
-            params = {
-                'vs_currency': 'usd',
-                'order': 'market_cap_desc',
-                'per_page': limit,
-                'page': 1,
-                'sparkline': False,
-                'price_change_percentage': '24h'
+            # Expand the crypto list for live prices display
+            extended_cryptos = {
+                'bitcoin': 42500.00, 'ethereum': 2650.00, 'tether': 1.00,
+                'binance-coin': 315.80, 'solana': 95.50, 'cardano': 0.48,
+                'dogecoin': 0.088, 'polygon': 0.85, 'avalanche': 38.50,
+                'chainlink': 14.75, 'uniswap': 6.80, 'litecoin': 72.30,
+                'bitcoin-cash': 245.60, 'stellar': 0.115, 'filecoin': 5.45,
+                'tron': 0.105, 'cosmos': 9.85, 'monero': 158.70,
+                'ethereum-classic': 20.45, 'near': 2.15
             }
             
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            # Add random variations
+            result = {}
+            for crypto, base_price in list(extended_cryptos.items())[:limit]:
+                if crypto == 'tether':
+                    result[crypto] = 1.00
+                else:
+                    variation = random.uniform(-0.03, 0.03)
+                    result[crypto] = round(base_price * (1 + variation), 4)
             
-            crypto_info = []
-            for item in data:
-                price_change = item.get('price_change_percentage_24h_in_currency')
-                change_emoji = '▲' if price_change and price_change >= 0 else '▼'
-                
-                crypto_info.append({
-                    'name': item.get('name', 'N/A'),
-                    'symbol': item.get('symbol', 'N/A').upper(),
-                    'price': f"${item.get('current_price', 0):,.2f}",
-                    'change': f"{change_emoji} {price_change:.2f}%" if price_change else "N/A"
-                })
-            
-            return crypto_info
-            
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error fetching crypto prices: {e}")
-            return None
+            return result
         except Exception as e:
-            logging.error(f"Unexpected error in crypto price fetch: {e}")
-            return None
+            self.logger.error(f"Error getting crypto prices: {e}")
+            return {}
+    
+    def get_stock_list_prices(self, tickers: list) -> Dict[str, float]:
+        """Get prices for a list of stocks"""
+        result = {}
+        for ticker in tickers:
+            result[ticker] = self.get_current_stock_price(ticker)
+        return result
 
-# Global market data instance
+# Global instance
 market = MarketDataManager()

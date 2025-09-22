@@ -5,10 +5,80 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-
 from config import ADMIN_USER_IDS
 from database import db
 
+async def show_pending_stock_investments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show pending stock investments"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT si.id, si.user_id, u.username, u.full_name, u.email,
+                   si.amount_invested_usd, si.stock_ticker, si.purchase_price, si.investment_date
+            FROM stock_investments si
+            JOIN users u ON si.user_id = u.user_id
+            WHERE si.status = 'pending'
+            ORDER BY si.investment_date DESC
+        ''')
+        pending_stocks = cursor.fetchall()
+    
+    if not pending_stocks:
+        text = "✅ No pending stock investments at the moment."
+        keyboard = [[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        return
+    
+    text = "📈 **PENDING STOCK INVESTMENTS**\n\n"
+    keyboard = []
+    
+    for stock in pending_stocks:
+        stock_id, user_id, username, full_name, email, amount, ticker, price, date = stock
+        
+        text += f"**ID:** {stock_id}\n"
+        text += f"**User:** @{username} [{user_id}]\n"
+        text += f"**Name:** {full_name or 'N/A'}\n"
+        text += f"**Stock:** {ticker.upper()}\n"
+        text += f"**Amount:** ${amount:,.2f}\n"
+        text += f"**Price:** ${price:,.2f}\n"
+        text += f"**Date:** {date}\n"
+        text += "─────────────────────\n"
+        
+        keyboard.append([
+            InlineKeyboardButton("✅ Confirm", callback_data=f"admin_confirm_stock_{stock_id}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"admin_reject_stock_{stock_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+# Update the handle_admin_callback function
+async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handle admin callback queries"""
+    action = data.split("_")[1] if len(data.split("_")) > 1 else None
+    
+    if action == "investments":
+        await show_pending_investments(update, context)
+    elif action == "withdrawals":
+        await show_pending_withdrawals(update, context)
+    elif action == "stock" and data.endswith("investments"):
+        await show_pending_stock_investments(update, context)
+    elif action == "user" and data.endswith("stats"):
+        await show_user_stats(update, context)
+    elif action == "broadcast":
+        await handle_broadcast_setup(update, context)
+    elif data.startswith("admin_confirm_"):
+        await handle_admin_confirmation(update, context, data)
+    elif data.startswith("admin_reject_"):
+        await handle_admin_rejection(update, context, data)
+    else:
+        await update.callback_query.message.edit_text(
+            "❌ Unknown admin action.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
+        )
+        
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /admin command"""
     user = update.effective_user
