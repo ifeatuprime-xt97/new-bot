@@ -507,9 +507,9 @@ Use the Invest button to start earning!
     
     # Store withdrawal options
     context.user_data['withdraw_options'] = {
-        '25%': current_balance * 0.25,
-        '50%': current_balance * 0.50,
-        '100%': current_balance
+        "25%": current_balance * 0.25,
+        "50%": current_balance * 0.50,
+        "100%": current_balance
     }
     
     keyboard = [
@@ -624,7 +624,7 @@ async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAUL
     withdraw_options = context.user_data.get('withdraw_options', {})
     
     if withdrawal_type in withdraw_options:
-        amount = withdraw_options[withdrawal_type]
+        amount = withdraw_options[withdrawal_type + "%"]
         
         context.user_data['pending_withdrawal'] = {
             'amount': amount,

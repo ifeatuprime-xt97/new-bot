@@ -457,48 +457,7 @@ async def handle_stock_payment_details(update: Update, context: ContextTypes.DEF
     
     # Clean up
     context.user_data.pop('awaiting_stock_payment_details', None)
-    async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
-        """Process a stock sale request, update DB, notify admin, and request approval/rejection."""
-        user = update.effective_user
-        # Fetch stock info from DB
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT stock_ticker, shares, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
-            stock = cursor.fetchone()
-        if not stock:
-            await update.callback_query.message.edit_text("❌ Stock not found or invalid sale request.")
-            return
-        ticker, shares, purchase_price = stock
-        # Mark sale request in DB (add a pending sale entry)
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO stock_sales (user_id, stock_id, stock_ticker, shares, purchase_price, status)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (user.id, stock_id, ticker, shares, purchase_price, 'pending'))
-            conn.commit()
-        # Notify user
-        await update.callback_query.message.edit_text(
-            f"✅ Stock sale request submitted for {shares} shares of {ticker.upper()} at ${purchase_price:,.2f} per share.\n\nYour request is pending admin approval.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
-        )
-        # Notify admins
-        for admin_id in ADMIN_USER_IDS:
-            try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=(
-                        f"🚨 **NEW STOCK SALE REQUEST** 🚨\n\n"
-                        f"👤 User: @{user.username or user.id}\n"
-                        f"Stock: {ticker.upper()}\nShares: {shares}\nPurchase Price: ${purchase_price:,.2f}\n"
-                        f"Sale ID: {stock_id}\n\n"
-                        f"Approve or reject this sale in the admin panel."
-                    ),
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
-    context.user_data.pop('awaiting_stock_investment', None)
+
 
 # Notification helper functions
 async def notify_admins_new_investment(context, investment_data, amount, tx_id, network):
@@ -1091,46 +1050,48 @@ def update_admin_callback_handler():
 
 # Add this to the bottom of your message_handlers.py file
 async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
-    """Process a stock sale request, update DB, notify admin, and request approval/rejection."""
+    """Start stock sale request, insert into DB, and ask for wallet details."""
     user = update.effective_user
-    # Fetch stock info from DB
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT stock_ticker, shares, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
-        stock = cursor.fetchone()
-    if not stock:
-        await update.callback_query.message.edit_text("❌ Stock not found or invalid sale request.")
-        return
-    ticker, shares, purchase_price = stock
-    # Mark sale request in DB (add a pending sale entry)
+
+    # Fetch stock info
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO stock_sales (user_id, stock_id, stock_ticker, shares, purchase_price, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (user.id, stock_id, ticker, shares, purchase_price, 'pending'))
+            SELECT stock_ticker, amount_invested_usd, purchase_price
+            FROM stock_investments
+            WHERE id = ? AND user_id = ? AND status = 'confirmed'
+        ''', (stock_id, user.id))
+        stock = cursor.fetchone()
+
+    if not stock:
+        await update.callback_query.message.edit_text("❌ Stock not found or invalid sale request.")
+        return
+
+    ticker, invested_amount, purchase_price = stock
+    shares = invested_amount / purchase_price if purchase_price > 0 else 0
+    total_value = shares * purchase_price  # You can also use current market price here
+
+    # Create sale record (awaiting wallet)
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO stock_sales (
+                user_id, stock_investment_id, shares_sold, sale_price, total_value, status
+            ) VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user.id, stock_id, shares, purchase_price, total_value, 'awaiting_wallet'))
+        sale_id = cursor.lastrowid
         conn.commit()
-    # Notify user
+
+    # Save sale_id in user context so we can update wallet later
+    context.user_data['pending_sale_id'] = sale_id
+
+    # Ask user for wallet address
     await update.callback_query.message.edit_text(
-        f"✅ Stock sale request submitted for {shares} shares of {ticker.upper()} at ${purchase_price:,.2f} per share.\n\nYour request is pending admin approval.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
+        f"📈 You are selling **{shares:.2f} shares of {ticker.upper()}** "
+        f"at ${purchase_price:,.2f}/share (Total: ${total_value:,.2f}).\n\n"
+        "💰 Please enter your **USDT (TRC20) wallet address** where payment will be sent."
     )
-    # Notify admins
-    for admin_id in ADMIN_USER_IDS:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=(
-                    f"🚨 **NEW STOCK SALE REQUEST** 🚨\n\n"
-                    f"👤 User: @{user.username or user.id}\n"
-                    f"Stock: {ticker.upper()}\nShares: {shares}\nPurchase Price: ${purchase_price:,.2f}\n"
-                    f"Sale ID: {stock_id}\n\n"
-                    f"Approve or reject this sale in the admin panel."
-                ),
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
+
 async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Enhanced text message handler that includes admin functionality"""
     user = update.effective_user
@@ -1154,3 +1115,46 @@ async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEF
         await handle_registration_email(update, context, message_text)
         return
             
+
+async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Capture wallet address for pending stock sale."""
+    user = update.effective_user
+    wallet_address = update.message.text
+    sale_id = context.user_data.get('pending_sale_id')
+
+    if not sale_id:
+        await update.message.reply_text("❌ No pending sale request found.")
+        return
+
+    # Update sale with wallet address
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE stock_sales
+            SET wallet_address = ?, status = 'pending'
+            WHERE id = ? AND user_id = ?
+        ''', (wallet_address, sale_id, user.id))
+        conn.commit()
+
+    await update.message.reply_text(
+        f"✅ Wallet address saved.\n\n"
+        f"Your stock sale request is now pending admin approval."
+    )
+
+    # Notify admins
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"🚨 **NEW STOCK SALE REQUEST** 🚨\n\n"
+                    f"👤 User: @{user.username or user.id}\n"
+                    f"Wallet: `{wallet_address}`\n"
+                    f"Sale ID: {sale_id}\n"
+                    f"Status: pending\n\n"
+                    f"Approve or reject this sale in the admin panel."
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
