@@ -11,6 +11,31 @@ from .utils import log_admin_action
 from config import ADMIN_USER_IDS
 from database import db
 from handlers.user_handlers import show_main_menu
+import asyncio
+
+async def schedule_message_deletion(context, chat_id, message_id, delay_seconds=120):
+    """Schedule a message for deletion after delay"""
+    try:
+        await asyncio.sleep(delay_seconds)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logging.error(f"Failed to delete message {message_id}: {e}")
+
+async def send_temporary_message(update, context, text, reply_markup=None, parse_mode=None, delete_after=120):
+    """Send a message that will be auto-deleted"""
+    if update.message:
+        sent_message = await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        # Schedule deletion of both user message and bot response
+        asyncio.create_task(schedule_message_deletion(context, update.message.chat_id, update.message.message_id, delete_after))
+        asyncio.create_task(schedule_message_deletion(context, sent_message.chat_id, sent_message.message_id, delete_after))
+        return sent_message
+    elif update.callback_query:
+        # For callback queries, edit the message and schedule deletion
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        asyncio.create_task(schedule_message_deletion(context, update.callback_query.message.chat_id, 
+                                                    update.callback_query.message.message_id, delete_after))
+        return update.callback_query.message
+    
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all text messages"""
@@ -57,9 +82,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Default response for unhandled messages
-    await update.message.reply_text(
-        "❌ I didn't understand that. Use /start for the main menu or click a button from the keyboard."
-    )
+    await send_temporary_message(
+    update, context,
+    "❌ I didn't understand that. Use /start for the main menu or click a button from the keyboard.",
+    delete_after=60  # Shorter timeout for error messages
+)
 
 async def handle_registration_name(update: Update, context: ContextTypes.DEFAULT_TYPE, full_name: str):
     """Handle full name input during registration"""
@@ -91,9 +118,11 @@ async def handle_registration_email(update: Update, context: ContextTypes.DEFAUL
         context.user_data.pop('full_name', None)
         context.user_data.pop('referred_by_id', None)
         
-        await update.message.reply_text(
+        await send_temporary_message(
+            update, context,
             "✅ Registration completed! Welcome to Alpha Vault!\n\n"
-            "🏆 *Pro Tip:* Check the leaderboard to see what top traders are earning!"
+            "🏆 *Pro Tip:* Check the leaderboard to see what top traders are earning!",
+            delete_after=120
         )
         await show_main_menu(update, context, user)
     else:
@@ -151,15 +180,18 @@ async def handle_payment_details(update: Update, context: ContextTypes.DEFAULT_T
         )
         
         if success:
-            await update.message.reply_text(
-                "✅ **Payment Submitted Successfully!**\n\n"
-                f"💰 Amount: ${amount:,.2f}\n"
-                f"💎 Crypto: {investment_data['crypto'].upper()}\n"
-                f"📄 Transaction ID: `{tx_id}`\n\n"
-                "⏳ Your investment is pending admin confirmation.\n"
-                "You'll be notified once verified and your portfolio will be updated!",
-                parse_mode='Markdown'
-            )
+            await send_temporary_message(
+            update, context,
+            "✅ **Payment Submitted Successfully!**\n\n"
+            f"💰 Amount: ${amount:,.2f}\n"
+            f"💎 Crypto: {investment_data['crypto'].upper()}\n"
+            f"📄 Transaction ID: `{tx_id}`\n\n"
+            "⏳ Your investment is pending admin confirmation.\n"
+            "You'll be notified once verified and your portfolio will be updated!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]),
+            parse_mode='Markdown',
+            delete_after=120
+        )
             
             # Notify admins
             await notify_admins_new_investment(context, investment_data, amount, tx_id, network)
@@ -246,14 +278,17 @@ async def handle_withdrawal_address(update: Update, context: ContextTypes.DEFAUL
             ''', (user_id, amount, wallet_address))
             conn.commit()
         
-        await update.message.reply_text(
-            "✅ **Withdrawal Request Submitted!**\n\n"
-            f"💰 Amount: ${amount:,.2f}\n"
-            f"💳 Address: `{wallet_address}`\n\n"
-            "⏰ Your request will be processed within 24 hours.\n"
-            "You'll receive a confirmation once the funds are sent!",
-            parse_mode='Markdown'
-        )
+        await send_temporary_message(
+        update, context,
+        "✅ **Withdrawal Request Submitted!**\n\n"
+        f"💰 Amount: ${amount:,.2f}\n"
+        f"💳 Address: `{wallet_address}`\n\n"
+        "⏰ Your request will be processed within 24 hours.\n"
+        "You'll receive a confirmation once the funds are sent!",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]),
+        parse_mode='Markdown',
+        delete_after=120
+    )
         
         # Notify admins
         await notify_admins_new_withdrawal(context, user_id, amount, wallet_address)
@@ -422,6 +457,47 @@ async def handle_stock_payment_details(update: Update, context: ContextTypes.DEF
     
     # Clean up
     context.user_data.pop('awaiting_stock_payment_details', None)
+    async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+        """Process a stock sale request, update DB, notify admin, and request approval/rejection."""
+        user = update.effective_user
+        # Fetch stock info from DB
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT stock_ticker, shares, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
+            stock = cursor.fetchone()
+        if not stock:
+            await update.callback_query.message.edit_text("❌ Stock not found or invalid sale request.")
+            return
+        ticker, shares, purchase_price = stock
+        # Mark sale request in DB (add a pending sale entry)
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO stock_sales (user_id, stock_id, stock_ticker, shares, purchase_price, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (user.id, stock_id, ticker, shares, purchase_price, 'pending'))
+            conn.commit()
+        # Notify user
+        await update.callback_query.message.edit_text(
+            f"✅ Stock sale request submitted for {shares} shares of {ticker.upper()} at ${purchase_price:,.2f} per share.\n\nYour request is pending admin approval.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
+        )
+        # Notify admins
+        for admin_id in ADMIN_USER_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        f"🚨 **NEW STOCK SALE REQUEST** 🚨\n\n"
+                        f"👤 User: @{user.username or user.id}\n"
+                        f"Stock: {ticker.upper()}\nShares: {shares}\nPurchase Price: ${purchase_price:,.2f}\n"
+                        f"Sale ID: {stock_id}\n\n"
+                        f"Approve or reject this sale in the admin panel."
+                    ),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
     context.user_data.pop('awaiting_stock_investment', None)
 
 # Notification helper functions

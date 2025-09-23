@@ -10,8 +10,33 @@ from database import db
 from market_data import market
 from .utils import log_admin_action
 from handlers.user_handlers import show_main_menu, get_random_wallet
+from handlers.message_handlers import handle_stock_sale
 from config import ADMIN_USER_IDS
 
+import asyncio
+
+async def schedule_message_deletion(context, chat_id, message_id, delay_seconds=120):
+    """Schedule a message for deletion after delay"""
+    try:
+        await asyncio.sleep(delay_seconds)
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logging.error(f"Failed to delete message {message_id}: {e}")
+
+async def send_temporary_message(update, context, text, reply_markup=None, parse_mode=None, delete_after=120):
+    """Send a message that will be auto-deleted"""
+    if update.message:
+        sent_message = await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        # Schedule deletion of both user message and bot response
+        asyncio.create_task(schedule_message_deletion(context, update.message.chat_id, update.message.message_id, delete_after))
+        asyncio.create_task(schedule_message_deletion(context, sent_message.chat_id, sent_message.message_id, delete_after))
+        return sent_message
+    elif update.callback_query:
+        # For callback queries, edit the message and schedule deletion
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+        asyncio.create_task(schedule_message_deletion(context, update.callback_query.message.chat_id, 
+                                                    update.callback_query.message.message_id, delete_after))
+        return update.callback_query.message
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main callback query handler - handles ALL callback queries"""
     query = update.callback_query
@@ -95,6 +120,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     "❌ You do not have permission to access the admin panel.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
                 )
+        
+        elif data == "user_history":
+            await show_user_transaction_history(update, context)
+
+        elif data == "withdraw_stocks":
+            await handle_stock_withdrawal(update, context)
+        elif data.startswith("sell_stock_"):
+            stock_id = int(data.replace("sell_stock_", ""))
+            await handle_stock_sale(update, context, stock_id)        
         
         else:
             await query.message.edit_text(
@@ -432,16 +466,34 @@ async def show_withdraw_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     current_balance = user_data[8] if len(user_data) > 8 else 0
     
-    if current_balance <= 0:
+    # Get stock portfolio value
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT stock_ticker, amount_invested_usd, purchase_price
+            FROM stock_investments
+            WHERE user_id = ? AND status = 'confirmed'
+        ''', (user.id,))
+        stock_investments = cursor.fetchall()
+    
+    total_stock_value = 0
+    for ticker, amount, price in stock_investments:
+        current_price = market.get_current_stock_price(ticker)
+        shares = amount / price if price > 0 else 0
+        current_value = shares * current_price
+        total_stock_value += current_value
+    
+    if current_balance <= 0 and total_stock_value <= 0:
         text = f"""
 ❌ **Insufficient Balance**
 
 Your current balance: ${current_balance:.2f}
+Your stock portfolio value: ${total_stock_value:.2f}
 
 To withdraw funds, you need to:
-• Make an investment first
-• Wait for profits to accumulate
-• Ensure minimum $10 balance
+- Make an investment first
+- Wait for profits to accumulate
+- Ensure minimum $10 balance
 
 Use the Invest button to start earning!
         """
@@ -465,6 +517,7 @@ Use the Invest button to start earning!
          InlineKeyboardButton("💸 Withdraw 50%", callback_data="withdraw_50")],
         [InlineKeyboardButton("💸 Withdraw 100%", callback_data="withdraw_100"),
          InlineKeyboardButton("💰 Custom Amount", callback_data="withdraw_custom")],
+        [InlineKeyboardButton("📈 Sell Stocks", callback_data="withdraw_stocks")],  # ADD THIS LINE
         [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -472,27 +525,76 @@ Use the Invest button to start earning!
     text = f"""
 💸 **WITHDRAWAL CENTER**
 
-💰 **Available Balance:** ${current_balance:,.2f}
+💰 **Available Cash Balance:** ${current_balance:,.2f}
+📈 **Stock Portfolio Value:** ${total_stock_value:,.2f}
+💎 **Total Assets:** ${(current_balance + total_stock_value):,.2f}
 
-**Quick Options:**
-• 25%: ${context.user_data['withdraw_options']['25%']:,.2f}
-• 50%: ${context.user_data['withdraw_options']['50%']:,.2f}
-• 100%: ${context.user_data['withdraw_options']['100%']:,.2f}
+**Quick Cash Withdrawals:**
+- 25%: ${context.user_data['withdraw_options']['25%']:,.2f}
+- 50%: ${context.user_data['withdraw_options']['50%']:,.2f}
+- 100%: ${context.user_data['withdraw_options']['100%']:,.2f}
 
 ⚡ **Process:**
-1. Select amount below
+1. Select amount or sell stocks below
 2. Provide USDT wallet address (TRC20)
 3. Admin processes within 24 hours
 
 🔒 **Security:**
-• All withdrawals verified
-• Minimum: $10 USDT
-• Network: TRC20 only
+- All withdrawals verified
+- Minimum: $10 USDT
+- Network: TRC20 only
 
 Select option below: 👇
     """
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def handle_stock_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stock withdrawal/selling"""
+    user = update.callback_query.from_user
+    
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT si.id, si.stock_ticker, si.amount_invested_usd, si.purchase_price, si.investment_date
+            FROM stock_investments si
+            WHERE si.user_id = ? AND si.status = 'confirmed'
+            ORDER BY si.investment_date DESC
+        ''', (user.id,))
+        stocks = cursor.fetchall()
+    
+    if not stocks:
+        text = "📈 **NO STOCKS TO SELL**\n\nYou don't have any confirmed stock investments to sell."
+        keyboard = [[InlineKeyboardButton("🔙 Withdraw Menu", callback_data="withdraw")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup)
+        return
+    
+    text = "📈 **YOUR STOCK PORTFOLIO**\n\nSelect a stock to sell:\n\n"
+    keyboard = []
+    
+    for stock in stocks:
+        stock_id, ticker, invested_amount, purchase_price, date = stock
+        current_price = market.get_current_stock_price(ticker)
+        shares = invested_amount / purchase_price if purchase_price > 0 else 0
+        current_value = shares * current_price
+        pnl = current_value - invested_amount
+        pnl_percent = (pnl / invested_amount * 100) if invested_amount > 0 else 0
+        
+        emoji = "📈" if pnl >= 0 else "📉"
+        text += f"{emoji} **{ticker.upper()}**\n"
+        text += f"   Invested: ${invested_amount:.2f}\n"
+        text += f"   Current Value: ${current_value:.2f}\n"
+        text += f"   P&L: ${pnl:.2f} ({pnl_percent:+.1f}%)\n\n"
+        
+        keyboard.append([InlineKeyboardButton(f"Sell {ticker.upper()} - ${current_value:.2f}", 
+                                            callback_data=f"sell_stock_{stock_id}")])
+    
+    keyboard.append([InlineKeyboardButton("🔙 Withdraw Menu", callback_data="withdraw")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
 
 async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Handle withdrawal option selection"""
@@ -710,6 +812,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("📊 Portfolio", callback_data="portfolio")],
+        [InlineKeyboardButton("📜 Transaction History", callback_data="user_history")],  # ADD THIS
         [InlineKeyboardButton("👥 Referrals", callback_data="referrals")],
         [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]
     ]
@@ -793,3 +896,53 @@ This helps our admin verify your payment quickly!
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
     context.user_data['awaiting_payment_details'] = True
+
+async def show_user_transaction_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show user's transaction history"""
+    user = update.callback_query.from_user
+    
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get all transactions for user
+        cursor.execute('''
+            SELECT 'Investment' as type, amount, investment_date as date, status, crypto_type as details
+            FROM investments WHERE user_id = ?
+            UNION ALL
+            SELECT 'Withdrawal' as type, amount, withdrawal_date as date, status, wallet_address as details
+            FROM withdrawals WHERE user_id = ?
+            UNION ALL
+            SELECT 'Stock Purchase' as type, amount_invested_usd as amount, investment_date as date, status, stock_ticker as details
+            FROM stock_investments WHERE user_id = ?
+            ORDER BY date DESC
+            LIMIT 20
+        ''', (user.id, user.id, user.id))
+        
+        transactions = cursor.fetchall()
+    
+    if not transactions:
+        text = "📜 **TRANSACTION HISTORY**\n\nNo transactions found.\nStart investing to see your history here!"
+    else:
+        text = "📜 **YOUR TRANSACTION HISTORY**\n\n"
+        
+        for i, (tx_type, amount, date, status, details) in enumerate(transactions[:15], 1):
+            status_emoji = {"confirmed": "✅", "pending": "⏳", "rejected": "❌"}.get(status.lower(), "❓")
+            type_emoji = {"Investment": "💰", "Withdrawal": "💸", "Stock Purchase": "📈"}.get(tx_type, "📋")
+            
+            text += f"{i}. {type_emoji} **{tx_type}**\n"
+            text += f"   Amount: ${amount:,.2f}\n"
+            text += f"   Status: {status_emoji} {status.title()}\n"
+            text += f"   Details: {details}\n"
+            text += f"   Date: {date[:16] if date else 'N/A'}\n\n"
+        
+        if len(transactions) > 15:
+            text += f"... and {len(transactions) - 15} more transactions"
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Refresh", callback_data="user_history")],
+        [InlineKeyboardButton("📊 Portfolio", callback_data="portfolio")],
+        [InlineKeyboardButton("🔙 Profile", callback_data="profile")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')

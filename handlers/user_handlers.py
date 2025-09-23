@@ -72,20 +72,21 @@ Hello {user.first_name}! Your AI-powered crypto investment hub.
 🏆 *Check the leaderboard to see what top traders are earning!*
 
 💎 Investment Plans:
-• 🥉 Core: $1K-$15K (1.43% daily)
-• 🥈 Growth: $20K-$80K (2.14% daily) 
-• 🥇 Alpha: $100K+ (2.86% daily)
+- 🥉 Core: $1K-$15K (1.43% daily)
+- 🥈 Growth: $20K-$80K (2.14% daily) 
+- 🥇 Alpha: $100K+ (2.86% daily)
 
 🎯 Features:
-• Automated daily profits
-• Secure multi-crypto wallets
-• Real-time portfolio tracking
-• Instant withdrawals
-• Referral bonuses
+- Automated daily profits
+- Secure multi-crypto wallets
+- Real-time portfolio tracking
+- Instant withdrawals
+- Referral bonuses
 
 ⚡ *Start your journey to the top!* 👇
     """
     
+    # Use permanent menu (don't auto-delete main menu)
     if update.message:
         await update.message.reply_text(welcome_text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
     elif update.callback_query:

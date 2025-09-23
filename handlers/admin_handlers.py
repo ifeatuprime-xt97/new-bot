@@ -8,6 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from .message_handlers import handle_broadcast_confirmation_callback
+from handlers.message_handlers import confirm_balance_change
 
 from .message_handlers import handle_balance_confirmation_callback
 from config import ADMIN_USER_IDS
@@ -720,6 +721,106 @@ Type the User ID below:
     
     elif action == "history":
         await show_balance_history(update, context)
+
+async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id_str: str):
+    """Handle user ID input for balance editing"""
+    try:
+        # Clean the input - remove any extra characters
+        cleaned_input = user_id_str.strip().replace('@', '').replace('#', '')
+        
+        # Try to parse as integer
+        user_id = int(cleaned_input)
+        
+        # Verify user exists
+        user_data = db.get_user(user_id)
+        if not user_data:
+            # Also try searching by username if direct ID fails
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM users WHERE username LIKE ? OR user_id = ?', 
+                             (f'%{cleaned_input}%', user_id))
+                user_data = cursor.fetchone()
+        
+        if not user_data:
+            keyboard = [
+                [InlineKeyboardButton("🔍 Search User", callback_data="admin_search_user")],
+                [InlineKeyboardButton("🔙 Balance Menu", callback_data="admin_edit_balance")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"❌ User with ID '{user_id_str}' not found.\n\n"
+                "**Tips:**\n"
+                "• Enter only numbers (e.g., 123456789)\n"
+                "• Use Search User to find the correct ID\n"
+                "• Check if user is registered with /start\n\n"
+                f"**Debug Info:**\n"
+                f"• Input received: '{user_id_str}'\n"
+                f"• Parsed as: {user_id}\n"
+                f"• Total users in database: {get_total_user_count()}",
+                reply_markup=reply_markup
+            )
+            context.user_data.pop('awaiting_balance_user_id', None)
+            return
+        
+        # Store user data for next step
+        context.user_data['balance_target_user'] = user_data
+        context.user_data.pop('awaiting_balance_user_id', None)
+        
+        action = context.user_data.get('balance_action')
+        current_balance = user_data[8]  # current_balance field
+        username = user_data[1]
+        full_name = user_data[3]
+        
+        if action == "reset":
+            # Direct reset, no amount needed
+            await confirm_balance_change(update, context, 0, "RESET")
+        else:
+            context.user_data['awaiting_balance_amount'] = True
+            
+            action_text = {
+                "add": "ADD to",
+                "subtract": "SUBTRACT from", 
+                "set": "SET as new balance for"
+            }
+            
+            keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data="admin_edit_balance")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"✅ **USER FOUND!**\n\n"
+                f"💳 **{action_text[action].upper()} USER BALANCE**\n\n"
+                f"**User:** @{username} ({full_name or 'N/A'})\n"
+                f"**User ID:** {user_data[0]}\n"
+                f"**Current Balance:** ${current_balance:,.2f}\n\n"
+                f"Enter the amount to {action}:\n\n"
+                f"**Examples:**\n"
+                f"• 100\n"
+                f"• 500.50\n"
+                f"• 1000\n\n"
+                f"Type the amount below:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+    
+    except ValueError:
+        await update.message.reply_text(
+            f"❌ Invalid User ID format: '{user_id_str}'\n\n"
+            "**Please enter:**\n"
+            "• Numbers only (e.g., 123456789)\n"
+            "• No letters, symbols, or spaces\n\n"
+            "**Example:** 652353552"
+        )
+
+def get_total_user_count():
+    """Helper function to get total user count"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM users')
+            return cursor.fetchone()[0]
+    except:
+        return "unknown"
 
 async def show_balance_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show balance change history"""
