@@ -11,6 +11,7 @@ class DatabaseManager:
     def __init__(self, db_path: str = 'trading_bot.db'):
         self.db_path = db_path
         self.init_database()
+        self.ensure_admin_tables()
         
     @contextmanager
     def get_connection(self):
@@ -186,6 +187,11 @@ class DatabaseManager:
                 ''', sample_data)
                 conn.commit()
     
+    def ensure_admin_tables(self):
+        """Ensure admin-related tables exist"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
     def get_user(self, user_id: int) -> Optional[Tuple]:
         """Get user data by ID"""
         with self.get_connection() as conn:

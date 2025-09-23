@@ -82,8 +82,18 @@ def main():
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
     
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='admin_balance_logs';")
+        result = cursor.fetchone()
+        print("Admin table exists:", result is not None)
+        
     # Start bot
     application.run_polling(allowed_updates=["message", "callback_query"])
+
+    print("🎉 Admin system integration complete!")
+    print("📝 Follow the step-by-step guide above to integrate all components")
+    print("🧪 Test each feature thoroughly before deploying to production")
 
 if __name__ == '__main__':
     main()

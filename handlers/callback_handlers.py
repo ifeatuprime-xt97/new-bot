@@ -9,6 +9,7 @@ from config import InvestmentPlan, TECH_STOCKS, NON_TECH_STOCKS, ALL_STOCKS, ADM
 from database import db
 from market_data import market
 from handlers.user_handlers import show_main_menu, get_random_wallet
+from config import ADMIN_USER_IDS
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main callback query handler - handles ALL callback queries"""

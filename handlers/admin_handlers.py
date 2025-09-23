@@ -6,7 +6,8 @@ import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-
+from message_handlers import handle_balance_confirmation_callback
+from message_handlers import handle_broadcast_confirmation_callback
 from config import ADMIN_USER_IDS
 from database import db
 
@@ -79,19 +80,32 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await setup_broadcast_message(update, context)
     elif data == "admin_logs":
         await show_admin_logs(update, context)
+    elif data == "admin_user_list":
+        await show_user_list(update, context, 0)
+    elif data.startswith("admin_user_list_"):
+        page = int(data.split("_")[-1])
+        await show_user_list(update, context, page)
+    elif data.startswith("admin_user_profile_"):
+        user_id = int(data.split("_")[-1])
+        await show_user_profile(update, context, user_id)
+    elif data == "admin_confirm_balance_change":
+        await handle_balance_confirmation_callback(update, context)
+    elif data == "admin_confirm_broadcast":
+        await handle_broadcast_confirmation_callback(update, context)
     elif data.startswith("admin_confirm_"):
         await handle_admin_confirmation(update, context, data)
     elif data.startswith("admin_reject_"):
         await handle_admin_rejection(update, context, data)
-    elif data.startswith("admin_user_"):
-        await handle_user_management_callback(update, context, data)
     elif data.startswith("admin_balance_"):
         await handle_balance_edit_callback(update, context, data)
+    elif data.startswith("admin_user_"):
+        await handle_user_management_callback(update, context, data)
     else:
         await update.callback_query.message.edit_text(
             "❌ Unknown admin action.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
         )
+
 
 async def show_pending_investments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show pending crypto investments"""

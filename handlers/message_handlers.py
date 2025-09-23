@@ -7,6 +7,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from admin_handlers import log_admin_action
 from config import ADMIN_USER_IDS
 from database import db
 from handlers.user_handlers import show_main_menu
@@ -1035,5 +1036,4 @@ async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEF
     elif context.user_data.get('registration_step') == 'email':
         await handle_registration_email(update, context, message_text)
         return
-    
-    # ... rest of your existing message handlers
+            
