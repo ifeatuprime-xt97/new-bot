@@ -10,7 +10,7 @@ from database import db
 from market_data import market
 from .utils import log_admin_action
 from handlers.user_handlers import show_main_menu, get_random_wallet
-from handlers.message_handlers import handle_stock_sale
+from .message_handlers import handle_stock_sale
 from config import ADMIN_USER_IDS
 
 import asyncio
@@ -551,6 +551,7 @@ Select option below: 👇
 
 async def handle_stock_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle stock withdrawal/selling"""
+    logging.info("handle_stock_withdrawal triggered by Sell Stocks button.")
     user = update.callback_query.from_user
     
     with db.get_connection() as conn:

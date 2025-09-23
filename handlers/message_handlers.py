@@ -1090,6 +1090,47 @@ def update_admin_callback_handler():
     pass
 
 # Add this to the bottom of your message_handlers.py file
+async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Process a stock sale request, update DB, notify admin, and request approval/rejection."""
+    user = update.effective_user
+    # Fetch stock info from DB
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT stock_ticker, shares, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
+        stock = cursor.fetchone()
+    if not stock:
+        await update.callback_query.message.edit_text("❌ Stock not found or invalid sale request.")
+        return
+    ticker, shares, purchase_price = stock
+    # Mark sale request in DB (add a pending sale entry)
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO stock_sales (user_id, stock_id, stock_ticker, shares, purchase_price, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user.id, stock_id, ticker, shares, purchase_price, 'pending'))
+        conn.commit()
+    # Notify user
+    await update.callback_query.message.edit_text(
+        f"✅ Stock sale request submitted for {shares} shares of {ticker.upper()} at ${purchase_price:,.2f} per share.\n\nYour request is pending admin approval.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
+    )
+    # Notify admins
+    for admin_id in ADMIN_USER_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=(
+                    f"🚨 **NEW STOCK SALE REQUEST** 🚨\n\n"
+                    f"👤 User: @{user.username or user.id}\n"
+                    f"Stock: {ticker.upper()}\nShares: {shares}\nPurchase Price: ${purchase_price:,.2f}\n"
+                    f"Sale ID: {stock_id}\n\n"
+                    f"Approve or reject this sale in the admin panel."
+                ),
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
 async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Enhanced text message handler that includes admin functionality"""
     user = update.effective_user
