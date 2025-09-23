@@ -7,7 +7,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from admin_handlers import log_admin_action
+from .utils import log_admin_action
 from config import ADMIN_USER_IDS
 from database import db
 from handlers.user_handlers import show_main_menu

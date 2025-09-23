@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 from config import InvestmentPlan, TECH_STOCKS, NON_TECH_STOCKS, ALL_STOCKS, ADMIN_USER_IDS
 from database import db
 from market_data import market
+from .utils import log_admin_action
 from handlers.user_handlers import show_main_menu, get_random_wallet
 from config import ADMIN_USER_IDS
 

@@ -7,8 +7,9 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from message_handlers import handle_broadcast_confirmation_callback
-from handlers.message_handlers import handle_balance_confirmation_callback
+from .message_handlers import handle_broadcast_confirmation_callback
+
+from .message_handlers import handle_balance_confirmation_callback
 from config import ADMIN_USER_IDS
 from database import db
 
@@ -933,15 +934,7 @@ async def confirm_investment_command(update: Update, context: ContextTypes.DEFAU
         
         if success:
             await update.message.reply_text(f"✅ Investment confirmed for user {user_id}: ${amount:,.2f}")
-            
-            # Log the action
-            log_admin_action(
-                admin_id=update.effective_user.id,
-                action_type="investment_confirmation",
-                target_user_id=user_id,
-                amount=amount,
-                notes=f"Investment ID {investment_id} confirmed via command"
-            )
+        
             
             # Notify user
             try:
