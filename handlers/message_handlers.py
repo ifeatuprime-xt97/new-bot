@@ -550,3 +550,490 @@ async def notify_admins_new_stock_investment(context, stock_data, amount, tx_id)
             )
         except Exception as e:
             logging.error(f"Failed to notify admin {admin_id}: {e}")
+
+# Add these functions to your message_handlers.py for admin functionality
+
+async def handle_admin_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str):
+    """Handle admin-specific text message inputs"""
+    user = update.effective_user
+    
+    # Only process for admin users
+    if user.id not in ADMIN_USER_IDS:
+        return False  # Not handled by admin system
+    
+    # Handle user search
+    if context.user_data.get('awaiting_user_search'):
+        await handle_user_search_input(update, context, message_text)
+        return True
+    
+    # Handle balance editing - user ID input
+    elif context.user_data.get('awaiting_balance_user_id'):
+        await handle_balance_user_id_input(update, context, message_text)
+        return True
+    
+    # Handle balance editing - amount input
+    elif context.user_data.get('awaiting_balance_amount'):
+        await handle_balance_amount_input(update, context, message_text)
+        return True
+    
+    # Handle broadcast message
+    elif context.user_data.get('awaiting_broadcast_message'):
+        await handle_broadcast_message_admin(update, context, message_text)
+        return True
+    
+    return False  # Not handled by admin system
+
+async def handle_user_search_input(update: Update, context: ContextTypes.DEFAULT_TYPE, search_term: str):
+    """Handle user search input from admin"""
+    search_term = search_term.strip()
+    
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Try different search methods
+            users = []
+            
+            # Search by user ID
+            if search_term.isdigit():
+                cursor.execute('SELECT * FROM users WHERE user_id = ?', (int(search_term),))
+                user = cursor.fetchone()
+                if user:
+                    users.append(user)
+            
+            # Search by username
+            if not users:
+                username = search_term.replace('@', '')
+                cursor.execute('SELECT * FROM users WHERE username LIKE ?', (f'%{username}%',))
+                users = cursor.fetchall()
+            
+            # Search by email
+            if not users and '@' in search_term:
+                cursor.execute('SELECT * FROM users WHERE email LIKE ?', (f'%{search_term}%',))
+                users = cursor.fetchall()
+            
+            # Search by name
+            if not users:
+                cursor.execute('SELECT * FROM users WHERE full_name LIKE ?', (f'%{search_term}%',))
+                users = cursor.fetchall()
+    
+    except Exception as e:
+        logging.error(f"Error in user search: {e}")
+        await update.message.reply_text("❌ Error performing search. Please try again.")
+        context.user_data.pop('awaiting_user_search', None)
+        return
+    
+    if not users:
+        keyboard = [
+            [InlineKeyboardButton("🔍 Try Again", callback_data="admin_search_user")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"❌ No users found matching '{search_term}'\n\n"
+            "Try searching by:\n"
+            "• User ID (numbers only)\n"
+            "• Username (with or without @)\n"
+            "• Email address\n"
+            "• Full name",
+            reply_markup=reply_markup
+        )
+    else:
+        text = f"🔍 **SEARCH RESULTS** ({len(users)} found)\n\n"
+        keyboard = []
+        
+        for user in users[:10]:  # Limit to 10 results
+            user_id, username, first_name, full_name, email, reg_date, plan, invested, balance, profit, last_update, referral_code, referred_by = user
+            
+            text += f"**ID:** {user_id}\n"
+            text += f"**Username:** @{username or 'N/A'}\n"
+            text += f"**Name:** {full_name or 'N/A'}\n"
+            text += f"**Email:** {email or 'N/A'}\n"
+            text += f"**Balance:** ${balance:,.2f}\n"
+            text += f"**Invested:** ${invested:,.2f}\n"
+            text += "─────────────\n"
+            
+            keyboard.append([InlineKeyboardButton(f"View {username or user_id}", callback_data=f"admin_user_profile_{user_id}")])
+        
+        if len(users) > 10:
+            text += f"\n... and {len(users) - 10} more results"
+        
+        keyboard.append([InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+    
+    context.user_data.pop('awaiting_user_search', None)
+
+async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id_str: str):
+    """Handle user ID input for balance editing"""
+    try:
+        user_id = int(user_id_str.strip())
+        
+        # Verify user exists
+        user_data = db.get_user(user_id)
+        if not user_data:
+            keyboard = [
+                [InlineKeyboardButton("🔍 Search User", callback_data="admin_search_user")],
+                [InlineKeyboardButton("🔙 Balance Menu", callback_data="admin_edit_balance")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"❌ User with ID {user_id} not found.\n\n"
+                "Please check the User ID or use Search User to find the correct ID.",
+                reply_markup=reply_markup
+            )
+            context.user_data.pop('awaiting_balance_user_id', None)
+            return
+        
+        # Store user data for next step
+        context.user_data['balance_target_user'] = user_data
+        context.user_data.pop('awaiting_balance_user_id', None)
+        
+        action = context.user_data.get('balance_action')
+        current_balance = user_data[8]  # current_balance field
+        username = user_data[1]
+        full_name = user_data[3]
+        
+        if action == "reset":
+            # Direct reset, no amount needed
+            await confirm_balance_change(update, context, 0, "RESET")
+        else:
+            context.user_data['awaiting_balance_amount'] = True
+            
+            action_text = {
+                "add": "ADD to",
+                "subtract": "SUBTRACT from", 
+                "set": "SET as new balance for"
+            }
+            
+            keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data="admin_edit_balance")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"💳 **{action_text[action].upper()} USER BALANCE**\n\n"
+                f"**User:** @{username} ({full_name or 'N/A'})\n"
+                f"**Current Balance:** ${current_balance:,.2f}\n\n"
+                f"Enter the amount to {action}:\n\n"
+                f"**Examples:**\n"
+                f"• 100\n"
+                f"• 500.50\n"
+                f"• 1000\n\n"
+                f"Type the amount below:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+    
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid User ID. Please enter numbers only.\n\n"
+            "Example: 123456789"
+        )
+
+async def handle_balance_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_str: str):
+    """Handle amount input for balance editing"""
+    try:
+        amount = float(amount_str.strip().replace('$', '').replace(',', ''))
+        
+        if amount < 0:
+            await update.message.reply_text("❌ Amount cannot be negative. Please enter a positive number.")
+            return
+        
+        action = context.user_data.get('balance_action')
+        if action == 'subtract' and amount <= 0:
+            await update.message.reply_text("❌ Subtraction amount must be greater than 0.")
+            return
+        
+        await confirm_balance_change(update, context, amount, action.upper())
+    
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid amount format.\n\n"
+            "Please enter a valid number:\n"
+            "• 100\n"
+            "• 500.50\n"
+            "• 1000"
+        )
+
+async def confirm_balance_change(update: Update, context: ContextTypes.DEFAULT_TYPE, amount: float, action: str):
+    """Show confirmation for balance change"""
+    user_data = context.user_data.get('balance_target_user')
+    if not user_data:
+        await update.message.reply_text("❌ Session expired. Please start over.")
+        return
+    
+    target_user_id = user_data[0]
+    username = user_data[1]
+    full_name = user_data[3]
+    current_balance = user_data[8]
+    
+    # Calculate new balance
+    if action == "ADD":
+        new_balance = current_balance + amount
+    elif action == "SUBTRACT":
+        new_balance = max(0, current_balance - amount)  # Don't go negative
+    elif action == "SET":
+        new_balance = amount
+    elif action == "RESET":
+        new_balance = 0
+        amount = current_balance  # For logging purposes
+    
+    # Store confirmation data
+    context.user_data['balance_confirmation'] = {
+        'target_user_id': target_user_id,
+        'username': username,
+        'full_name': full_name,
+        'action': action,
+        'amount': amount,
+        'old_balance': current_balance,
+        'new_balance': new_balance
+    }
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Confirm", callback_data="admin_confirm_balance_change")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_edit_balance")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    warning = ""
+    if action == "SUBTRACT" and amount > current_balance:
+        warning = "\n⚠️ **Warning:** Amount exceeds current balance. Balance will be set to $0.00"
+    
+    await update.message.reply_text(
+        f"⚠️ **CONFIRM BALANCE CHANGE**\n\n"
+        f"**User:** @{username} ({full_name or 'N/A'})\n"
+        f"**Action:** {action}\n"
+        f"**Amount:** ${amount:,.2f}\n"
+        f"**Current Balance:** ${current_balance:,.2f}\n"
+        f"**New Balance:** ${new_balance:,.2f}\n"
+        f"{warning}\n\n"
+        f"⚠️ **This action cannot be undone!**\n"
+        f"Are you sure you want to proceed?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    # Clean up temporary states
+    context.user_data.pop('awaiting_balance_amount', None)
+    context.user_data.pop('balance_action', None)
+    context.user_data.pop('balance_target_user', None)
+
+async def handle_broadcast_message_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str):
+    """Handle broadcast message from admin"""
+    if len(message_text) > 2000:
+        await update.message.reply_text("❌ Message too long. Maximum 2000 characters allowed.")
+        return
+    
+    # Store message for confirmation
+    context.user_data['broadcast_message'] = message_text
+    context.user_data.pop('awaiting_broadcast_message', None)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Send Broadcast", callback_data="admin_confirm_broadcast")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="admin_panel")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Get user count
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM users')
+        user_count = cursor.fetchone()[0]
+    
+    await update.message.reply_text(
+        f"📢 **BROADCAST PREVIEW**\n\n"
+        f"**Message:**\n{message_text}\n\n"
+        f"**Recipients:** {user_count} users\n\n"
+        f"⚠️ **Warning:** This will send the message to all users immediately and cannot be undone!\n\n"
+        f"Are you sure you want to send this broadcast?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+# Add these callback handlers to your existing admin_handlers.py
+
+async def handle_balance_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle balance change confirmation callback"""
+    confirmation_data = context.user_data.get('balance_confirmation')
+    if not confirmation_data:
+        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
+        return
+    
+    target_user_id = confirmation_data['target_user_id']
+    username = confirmation_data['username']
+    full_name = confirmation_data['full_name']
+    action = confirmation_data['action']
+    amount = confirmation_data['amount']
+    old_balance = confirmation_data['old_balance']
+    new_balance = confirmation_data['new_balance']
+    
+    admin_id = update.callback_query.from_user.id
+    
+    try:
+        # Update user balance in database
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET current_balance = ? WHERE user_id = ?
+            ''', (new_balance, target_user_id))
+            conn.commit()
+        
+        # Log the admin action
+        log_admin_action(
+            admin_id=admin_id,
+            action_type=f"balance_{action.lower()}",
+            target_user_id=target_user_id,
+            amount=amount,
+            old_balance=old_balance,
+            new_balance=new_balance,
+            notes=f"Admin balance modification: {action}"
+        )
+        
+        # Send confirmation
+        await update.callback_query.message.edit_text(
+            f"✅ **BALANCE UPDATED SUCCESSFULLY**\n\n"
+            f"**User:** @{username} ({full_name or 'N/A'})\n"
+            f"**Action:** {action}\n"
+            f"**Amount:** ${amount:,.2f}\n"
+            f"**Previous Balance:** ${old_balance:,.2f}\n"
+            f"**New Balance:** ${new_balance:,.2f}\n\n"
+            f"✅ Change has been logged in admin records.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Edit Another Balance", callback_data="admin_edit_balance")],
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+            ]),
+            parse_mode='Markdown'
+        )
+        
+        # Notify the user about balance change
+        try:
+            if action == "ADD":
+                notification = f"🎉 **BALANCE UPDATED!**\n\n💰 ${amount:,.2f} has been added to your account!\n\nNew Balance: ${new_balance:,.2f}"
+            elif action == "SUBTRACT":
+                notification = f"ℹ️ **BALANCE UPDATED**\n\n💸 ${amount:,.2f} has been deducted from your account.\n\nNew Balance: ${new_balance:,.2f}"
+            elif action == "SET":
+                notification = f"ℹ️ **BALANCE UPDATED**\n\n💳 Your balance has been set to ${new_balance:,.2f}"
+            elif action == "RESET":
+                notification = f"ℹ️ **BALANCE RESET**\n\n💳 Your account balance has been reset to $0.00"
+            
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=notification,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Failed to notify user {target_user_id} about balance change: {e}")
+    
+    except Exception as e:
+        logging.error(f"Error updating user balance: {e}")
+        await update.callback_query.message.edit_text(
+            f"❌ **ERROR UPDATING BALANCE**\n\n{str(e)}\n\nPlease try again or contact technical support.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
+        )
+    
+    # Clean up
+    context.user_data.pop('balance_confirmation', None)
+
+async def handle_broadcast_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle broadcast confirmation callback"""
+    broadcast_message = context.user_data.get('broadcast_message')
+    if not broadcast_message:
+        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
+        return
+    
+    # Get all users
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        users = cursor.fetchall()
+    
+    success_count = 0
+    total_users = len(users)
+    admin_id = update.callback_query.from_user.id
+    
+    # Update message to show progress
+    await update.callback_query.message.edit_text(
+        f"📢 **SENDING BROADCAST...**\n\n"
+        f"📤 Sending to {total_users} users...\n"
+        f"⏳ Please wait...",
+        parse_mode='Markdown'
+    )
+    
+    # Send broadcast message
+    for user_tuple in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_tuple[0],
+                text=f"📢 **ANNOUNCEMENT**\n\n{broadcast_message}",
+                parse_mode='Markdown'
+            )
+            success_count += 1
+            await asyncio.sleep(0.05)  # Rate limiting to avoid hitting limits
+        except Exception as e:
+            logging.error(f"Failed to send broadcast to {user_tuple[0]}: {e}")
+    
+    # Log the broadcast
+    log_admin_action(
+        admin_id=admin_id,
+        action_type="broadcast_message",
+        notes=f"Broadcast sent to {success_count}/{total_users} users"
+    )
+    
+    # Send completion message
+    await update.callback_query.message.edit_text(
+        f"✅ **BROADCAST COMPLETE!**\n\n"
+        f"📊 **Results:**\n"
+        f"• Total Users: {total_users}\n"
+        f"• Successfully Sent: {success_count}\n"
+        f"• Failed: {total_users - success_count}\n"
+        f"• Success Rate: {(success_count/total_users)*100:.1f}%\n\n"
+        f"✅ Broadcast has been logged in admin records.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Send Another", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        ]),
+        parse_mode='Markdown'
+    )
+    
+    # Clean up
+    context.user_data.pop('broadcast_message', None)
+
+# Update the main handle_admin_callback function to include new callbacks
+def update_admin_callback_handler():
+    """Add these cases to your existing handle_admin_callback function"""
+    # Add these cases to the existing function:
+    
+    # elif data == "admin_confirm_balance_change":
+    #     await handle_balance_confirmation_callback(update, context)
+    # elif data == "admin_confirm_broadcast":
+    #     await handle_broadcast_confirmation_callback(update, context)
+    
+    pass
+
+# Add this to the bottom of your message_handlers.py file
+async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced text message handler that includes admin functionality"""
+    user = update.effective_user
+    message_text = update.message.text.strip()
+    
+    # Check if admin system handles this message
+    if user.id in ADMIN_USER_IDS:
+        from handlers.admin_handlers import handle_admin_text_messages
+        if await handle_admin_text_messages(update, context, message_text):
+            return  # Message was handled by admin system
+    
+    # Continue with existing message handling logic...
+    # (Your existing handle_text_message code here)
+    
+    # Registration flow
+    if context.user_data.get('registration_step') == 'name':
+        await handle_registration_name(update, context, message_text)
+        return
+    
+    elif context.user_data.get('registration_step') == 'email':
+        await handle_registration_email(update, context, message_text)
+        return
+    
+    # ... rest of your existing message handlers
