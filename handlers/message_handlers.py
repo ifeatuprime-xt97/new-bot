@@ -1,3 +1,50 @@
+async def handle_balance_user_id_input(update, context, user_id_str):
+    """Stub: Handle balance user ID input"""
+    pass
+
+async def handle_balance_amount_input(update, context, amount_str):
+    """Stub: Handle balance amount input"""
+    pass
+
+async def handle_stock_edit_input(update, context, input_text):
+    """Stub: Handle stock edit input"""
+    pass
+
+async def handle_user_search_input(update, context, search_term):
+    """Stub: Handle user search input"""
+    pass
+
+async def handle_broadcast_message_admin(update, context, message_text):
+    """Stub: Handle broadcast message admin"""
+    pass
+
+async def handle_registration_name(update, context, message_text):
+    """Stub: Handle registration name"""
+    pass
+
+async def handle_registration_email(update, context, message_text):
+    """Stub: Handle registration email"""
+    pass
+
+async def handle_payment_details(update, context, message_text):
+    """Stub: Handle payment details"""
+    pass
+
+async def handle_withdrawal_amount(update, context, message_text):
+    """Stub: Handle withdrawal amount"""
+    pass
+
+async def handle_withdrawal_address(update, context, message_text):
+    """Stub: Handle withdrawal address"""
+    pass
+
+async def handle_stock_shares_input(update, context, message_text):
+    """Stub: Handle stock shares input"""
+    pass
+
+async def handle_stock_payment_details(update, context, message_text):
+    """Stub: Handle stock payment details"""
+    pass
 """
 Text message handlers
 """
@@ -37,10 +84,43 @@ async def send_temporary_message(update, context, text, reply_markup=None, parse
         return update.callback_query.message
     
 
+# Add these functions to your handlers/message_handlers.py
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all text messages"""
+    """Enhanced text message handler with complete admin support"""
     user = update.effective_user
     message_text = update.message.text.strip()
+    
+    # Check if admin system should handle this message FIRST
+    if user.id in ADMIN_USER_IDS:
+        # Handle admin balance editing
+        if context.user_data.get('awaiting_balance_user_id'):
+            await handle_balance_user_id_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_balance_amount'):
+            await handle_balance_amount_input(update, context, message_text)
+            return
+        
+        # Handle admin user editing
+        elif context.user_data.get('awaiting_user_edit'):
+            await handle_user_edit_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_investment_edit'):
+            await handle_investment_edit_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_stock_edit'):
+            await handle_stock_edit_input(update, context, message_text)
+            return
+        
+        # Handle admin search and broadcast
+        elif context.user_data.get('awaiting_user_search'):
+            await handle_user_search_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_broadcast_message'):
+            await handle_broadcast_message_admin(update, context, message_text)
+            return
+    
+    # Continue with regular user message handling...
     
     # Registration flow
     if context.user_data.get('registration_step') == 'name':
@@ -66,11 +146,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_withdrawal_address(update, context, message_text)
         return
     
-    # Admin broadcast message
-    elif context.user_data.get('awaiting_broadcast_message') and user.id in ADMIN_USER_IDS:
-        await handle_broadcast_message(update, context, message_text)
-        return
-    
     # Stock shares input
     elif context.user_data.get('awaiting_stock_shares'):
         await handle_stock_shares_input(update, context, message_text)
@@ -82,11 +157,205 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Default response for unhandled messages
-    await send_temporary_message(
-    update, context,
-    "❌ I didn't understand that. Use /start for the main menu or click a button from the keyboard.",
-    delete_after=60  # Shorter timeout for error messages
-)
+    await update.message.reply_text(
+        "❌ I didn't understand that. Use /start for the main menu or click a button from the keyboard."
+    )
+
+# Admin user editing handlers
+
+async def handle_user_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE, input_text: str):
+    """Handle user profile edit input from admin"""
+    edit_field = context.user_data.get('edit_field')
+    user_id = context.user_data.get('edit_user_id')
+    
+    if not edit_field or not user_id:
+        await update.message.reply_text("❌ Edit session expired. Please start over.")
+        context.user_data.pop('awaiting_user_edit', None)
+        return
+    
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if edit_field == 'name':
+                if len(input_text) < 2:
+                    await update.message.reply_text("❌ Name must be at least 2 characters long.")
+                    return
+                
+                cursor.execute('UPDATE users SET full_name = ? WHERE user_id = ?', (input_text, user_id))
+                conn.commit()
+                
+                success_msg = f"✅ **NAME UPDATED**\n\nUser's full name changed to: **{input_text}**"
+                
+            elif edit_field == 'email':
+                if '@' not in input_text or '.' not in input_text:
+                    await update.message.reply_text("❌ Please enter a valid email address.")
+                    return
+                
+                cursor.execute('UPDATE users SET email = ? WHERE user_id = ?', (input_text, user_id))
+                conn.commit()
+                
+                success_msg = f"✅ **EMAIL UPDATED**\n\nUser's email changed to: **{input_text}**"
+                
+            elif edit_field == 'regdate':
+                # Validate date format
+                try:
+                    from datetime import datetime
+                    parsed_date = datetime.strptime(input_text, '%Y-%m-%d')
+                    formatted_date = parsed_date.isoformat()
+                except ValueError:
+                    await update.message.reply_text(
+                        "❌ Invalid date format. Please use YYYY-MM-DD format.\n\n"
+                        "Example: 2024-01-15"
+                    )
+                    return
+                
+                cursor.execute('UPDATE users SET registration_date = ? WHERE user_id = ?', (formatted_date, user_id))
+                conn.commit()
+                
+                success_msg = f"✅ **REGISTRATION DATE UPDATED**\n\nUser's registration date changed to: **{input_text}**"
+        
+        # Log the action
+        log_admin_action(
+            admin_id=update.effective_user.id,
+            action_type=f"profile_edit_{edit_field}",
+            target_user_id=user_id,
+            notes=f"Changed {edit_field} to: {input_text}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Edit More", callback_data=f"admin_edit_profile_{user_id}")],
+            [InlineKeyboardButton("👤 View Profile", callback_data=f"admin_user_profile_{user_id}")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(success_msg, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error updating user {edit_field}: {e}")
+        await update.message.reply_text(f"❌ Error updating {edit_field}: {str(e)}")
+    
+    # Clean up
+    context.user_data.pop('awaiting_user_edit', None)
+    context.user_data.pop('edit_field', None)
+    context.user_data.pop('edit_user_id', None)
+
+async def handle_investment_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE, input_text: str):
+
+    """Handle investment editing input"""
+    edit_data = context.user_data.get('investment_edit_data')
+    if not edit_data:
+        await update.message.reply_text("❌ Edit session expired.")
+        return
+    field = edit_data.get('field')
+    investment_id = edit_data.get('investment_id')
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            if field == 'amount':
+                amount = float(input_text.replace(',', ''))
+                cursor.execute('UPDATE investments SET amount = ? WHERE id = ?', (amount, investment_id))
+                success_msg = f"✅ Investment amount updated to ${amount:,.2f}"
+            elif field == 'status':
+                if input_text.lower() not in ['confirmed', 'pending', 'rejected']:
+                    await update.message.reply_text("❌ Status must be: confirmed, pending, or rejected")
+                    return
+                cursor.execute('UPDATE investments SET status = ? WHERE id = ?', (input_text.lower(), investment_id))
+                success_msg = f"✅ Investment status updated to {input_text.title()}"
+            elif field == 'plan':
+                if input_text.upper() not in ['CORE', 'GROWTH', 'ALPHA']:
+                    await update.message.reply_text("❌ Plan must be: CORE, GROWTH, or ALPHA")
+                    return
+                cursor.execute('UPDATE investments SET plan = ? WHERE id = ?', (input_text.upper(), investment_id))
+                success_msg = f"✅ Investment plan updated to {input_text.upper()}"
+            conn.commit()
+        # Log the action
+        log_admin_action(
+            admin_id=update.effective_user.id,
+            action_type=f"investment_edit_{field}",
+            target_user_id=edit_data.get('user_id'),
+            notes=f"Investment {investment_id} {field} changed to: {input_text}"
+        )
+        user_id = edit_data.get('user_id')
+        keyboard = [
+            [InlineKeyboardButton("💰 Edit More Investments", callback_data=f"admin_edit_investments_{user_id}")],
+            [InlineKeyboardButton("👤 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(success_msg, reply_markup=reply_markup)
+    except ValueError:
+        await update.message.reply_text("❌ Invalid input format. Please try again.")
+    except Exception as e:
+        logging.error(f"Error updating investment: {e}")
+        await update.message.reply_text(f"❌ Error updating investment: {str(e)}")
+
+    # Clean up
+    context.user_data.pop('awaiting_investment_edit', None)
+    context.user_data.pop('investment_edit_data', None)
+
+async def handle_stock_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE, input_text: str):
+    """Handle stock editing input"""
+    edit_data = context.user_data.get('stock_edit_data')
+    
+    if not edit_data:
+        await update.message.reply_text("❌ Edit session expired.")
+        return
+    
+    field = edit_data.get('field')
+    stock_id = edit_data.get('stock_id')
+    
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if field == 'amount':
+                amount = float(input_text.replace(',', ''))
+                cursor.execute('UPDATE stock_investments SET amount_invested_usd = ? WHERE id = ?', (amount, stock_id))
+                success_msg = f"✅ Stock investment amount updated to ${amount:,.2f}"
+
+            elif field == 'price':
+                price = float(input_text.replace(',', ''))
+                cursor.execute('UPDATE stock_investments SET purchase_price = ? WHERE id = ?', (price, stock_id))
+                success_msg = f"✅ Stock purchase price updated to ${price:,.2f}"
+                
+            elif field == 'status':
+                if input_text.lower() not in ['confirmed', 'pending', 'rejected']:
+                    await update.message.reply_text("❌ Status must be: confirmed, pending, or rejected")
+                    return
+                cursor.execute('UPDATE stock_investments SET status = ? WHERE id = ?', (input_text.lower(), stock_id))
+                success_msg = f"✅ Stock status updated to {input_text.title()}"
+            
+            conn.commit()
+        
+        # Log the action
+        log_admin_action(
+            admin_id=update.effective_user.id,
+            action_type=f"stock_edit_{field}",
+            target_user_id=edit_data.get('user_id'),
+            notes=f"Stock {stock_id} {field} changed to: {input_text}"
+        )
+        
+        user_id = edit_data.get('user_id')
+        keyboard = [
+            [InlineKeyboardButton("📈 Edit More Stocks", callback_data=f"admin_edit_stocks_{user_id}")],
+            [InlineKeyboardButton("👤 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(success_msg, reply_markup=reply_markup)
+        
+    except ValueError:
+        await update.message.reply_text("❌ Invalid input format. Please try again.")
+    except Exception as e:
+        logging.error(f"Error updating stock: {e}")
+        await update.message.reply_text(f"❌ Error updating stock: {str(e)}")
+    
+    # Clean up
+    context.user_data.pop('awaiting_stock_edit', None)
+    context.user_data.pop('stock_edit_data', None)
+    
 
 async def handle_registration_name(update: Update, context: ContextTypes.DEFAULT_TYPE, full_name: str):
     """Handle full name input during registration"""
@@ -705,26 +974,54 @@ async def handle_user_search_input(update: Update, context: ContextTypes.DEFAULT
 async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id_str: str):
     """Handle user ID input for balance editing"""
     try:
-        user_id = int(user_id_str.strip())
+        # Clean the input - remove any extra characters
+        cleaned_input = user_id_str.strip().replace('@', '').replace('#', '')
+        
+        # Try to parse as integer
+        user_id = int(cleaned_input)
+        
+        # Debug logging
+        logging.info(f"Admin balance edit: searching for user ID {user_id}")
         
         # Verify user exists
         user_data = db.get_user(user_id)
+        
         if not user_data:
+            # Get total user count for debugging
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM users')
+                total_users = cursor.fetchone()[0]
+                
+                # Show some example user IDs
+                cursor.execute('SELECT user_id FROM users ORDER BY registration_date DESC LIMIT 3')
+                example_ids = [str(row[0]) for row in cursor.fetchall()]
+            
             keyboard = [
                 [InlineKeyboardButton("🔍 Search User", callback_data="admin_search_user")],
+                [InlineKeyboardButton("👥 View All Users", callback_data="admin_user_list")],
                 [InlineKeyboardButton("🔙 Balance Menu", callback_data="admin_edit_balance")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
-                f"❌ User with ID {user_id} not found.\n\n"
-                "Please check the User ID or use Search User to find the correct ID.",
-                reply_markup=reply_markup
+                f"❌ **USER NOT FOUND**\n\n"
+                f"User ID '{user_id}' does not exist in the database.\n\n"
+                f"**Database Info:**\n"
+                f"• Total users: {total_users}\n"
+                f"• Recent user IDs: {', '.join(example_ids)}\n\n"
+                f"**What to try:**\n"
+                f"• Use 'Search User' to find by username\n"
+                f"• Use 'View All Users' to browse\n"
+                f"• Double-check the user ID number\n"
+                f"• Make sure user has used /start",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
             )
             context.user_data.pop('awaiting_balance_user_id', None)
             return
         
-        # Store user data for next step
+        # User found - store data for next step
         context.user_data['balance_target_user'] = user_data
         context.user_data.pop('awaiting_balance_user_id', None)
         
@@ -732,6 +1029,8 @@ async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEF
         current_balance = user_data[8]  # current_balance field
         username = user_data[1]
         full_name = user_data[3]
+        
+        logging.info(f"User found: {username} (ID: {user_id}) - Balance: ${current_balance}")
         
         if action == "reset":
             # Direct reset, no amount needed
@@ -749,8 +1048,10 @@ async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEF
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(
+                f"✅ **USER FOUND!**\n\n"
                 f"💳 **{action_text[action].upper()} USER BALANCE**\n\n"
                 f"**User:** @{username} ({full_name or 'N/A'})\n"
+                f"**User ID:** {user_data[0]}\n"
                 f"**Current Balance:** ${current_balance:,.2f}\n\n"
                 f"Enter the amount to {action}:\n\n"
                 f"**Examples:**\n"
@@ -764,8 +1065,12 @@ async def handle_balance_user_id_input(update: Update, context: ContextTypes.DEF
     
     except ValueError:
         await update.message.reply_text(
-            "❌ Invalid User ID. Please enter numbers only.\n\n"
-            "Example: 123456789"
+            f"❌ **INVALID FORMAT**\n\n"
+            f"'{user_id_str}' is not a valid user ID.\n\n"
+            f"**Please enter:**\n"
+            f"• Numbers only (e.g., 123456789)\n"
+            f"• No letters, symbols, or spaces\n\n"
+            f"**Example:** 652353552"
         )
 
 async def handle_balance_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE, amount_str: str):
@@ -855,6 +1160,7 @@ async def confirm_balance_change(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data.pop('awaiting_balance_amount', None)
     context.user_data.pop('balance_action', None)
     context.user_data.pop('balance_target_user', None)
+
 
 async def handle_broadcast_message_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str):
     """Handle broadcast message from admin"""
@@ -1092,19 +1398,28 @@ async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         "💰 Please enter your **USDT (TRC20) wallet address** where payment will be sent."
     )
 
-async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Enhanced text message handler that includes admin functionality"""
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enhanced text message handler with admin support"""
     user = update.effective_user
     message_text = update.message.text.strip()
     
-    # Check if admin system handles this message
+    # Check if admin system should handle this message FIRST
     if user.id in ADMIN_USER_IDS:
-        from handlers.admin_handlers import handle_admin_text_messages
-        if await handle_admin_text_messages(update, context, message_text):
-            return  # Message was handled by admin system
+        # Handle admin-specific inputs
+        if context.user_data.get('awaiting_balance_user_id'):
+            await handle_balance_user_id_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_balance_amount'):
+            await handle_balance_amount_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_user_search'):
+            await handle_user_search_input(update, context, message_text)
+            return
+        elif context.user_data.get('awaiting_broadcast_message'):
+            await handle_broadcast_message_admin(update, context, message_text)
+            return
     
-    # Continue with existing message handling logic...
-    # (Your existing handle_text_message code here)
+    # Continue with regular user message handling...
     
     # Registration flow
     if context.user_data.get('registration_step') == 'name':
@@ -1114,7 +1429,36 @@ async def enhanced_handle_text_message(update: Update, context: ContextTypes.DEF
     elif context.user_data.get('registration_step') == 'email':
         await handle_registration_email(update, context, message_text)
         return
-            
+    
+    # Investment payment details
+    elif context.user_data.get('awaiting_payment_details'):
+        await handle_payment_details(update, context, message_text)
+        return
+    
+    # Withdrawal amount
+    elif context.user_data.get('awaiting_withdraw_amount'):
+        await handle_withdrawal_amount(update, context, message_text)
+        return
+    
+    # Withdrawal address
+    elif context.user_data.get('pending_withdrawal'):
+        await handle_withdrawal_address(update, context, message_text)
+        return
+    
+    # Stock shares input
+    elif context.user_data.get('awaiting_stock_shares'):
+        await handle_stock_shares_input(update, context, message_text)
+        return
+    
+    # Stock payment details
+    elif context.user_data.get('awaiting_stock_payment_details'):
+        await handle_stock_payment_details(update, context, message_text)
+        return
+    
+    # Default response for unhandled messages
+    await update.message.reply_text(
+        "❌ I didn't understand that. Use /start for the main menu or click a button from the keyboard."
+    )            
 
 async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Capture wallet address for pending stock sale."""

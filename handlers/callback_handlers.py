@@ -62,9 +62,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data == "invest_menu":
             await show_invest_menu(update, context)
         
+        
+
         elif data == "withdraw":
             await show_withdraw_menu(update, context)
-        
+
+        elif data.startswith("sell_stock_"):
+            stock_id = int(data.replace("sell_stock_", ""))
+            await handle_stock_sale(update, context, stock_id)
+       
+        elif data.startswith("withdraw_"):
+            await handle_withdrawal_options(update, context, data)
+
+
         elif data == "live_prices":
             await show_live_prices_menu(update, context)
         
@@ -100,9 +110,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         elif data == "confirm_stock_payment":
             await handle_stock_payment_confirmation(update, context)
         
-        # Withdrawal
-        elif data.startswith("withdraw_"):
-            await handle_withdrawal_options(update, context, data)
+
         
         # Live prices
         elif data.startswith("live_crypto"):
@@ -507,9 +515,9 @@ Use the Invest button to start earning!
     
     # Store withdrawal options
     context.user_data['withdraw_options'] = {
-        "25%": current_balance * 0.25,
-        "50%": current_balance * 0.50,
-        "100%": current_balance
+        '25%': current_balance * 0.25,
+        '50%': current_balance * 0.50,
+        '100%': current_balance
     }
     
     keyboard = [
@@ -551,7 +559,7 @@ Select option below: 👇
 
 async def handle_stock_withdrawal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle stock withdrawal/selling"""
-    logging.info("handle_stock_withdrawal triggered by Sell Stocks button.")
+
     user = update.callback_query.from_user
     
     with db.get_connection() as conn:
@@ -600,6 +608,7 @@ async def handle_stock_withdrawal(update: Update, context: ContextTypes.DEFAULT_
 async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Handle withdrawal option selection"""
     withdrawal_type = data.replace("withdraw_", "")
+    user = update.callback_query.from_user
     
     if withdrawal_type == "custom":
         context.user_data['awaiting_withdraw_amount'] = True
@@ -620,15 +629,36 @@ async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAUL
         )
         return
     
-    # Handle percentage withdrawals
-    withdraw_options = context.user_data.get('withdraw_options', {})
+    # Handle percentage withdrawals (25%, 50%, 100%)
+    user_data = db.get_user(user.id)
+    if not user_data:
+        await update.callback_query.message.edit_text("❌ User data not found.")
+        return
     
-    if withdrawal_type in withdraw_options:
-        amount = withdraw_options[withdrawal_type + "%"]
+    current_balance = user_data[8] if len(user_data) > 8 else 0
+    
+    # Calculate withdrawal amounts
+    withdrawal_amounts = {
+        '25': current_balance * 0.25,
+        '50': current_balance * 0.50,
+        '100': current_balance
+    }
+    
+    if withdrawal_type in withdrawal_amounts:
+        amount = withdrawal_amounts[withdrawal_type]
+        
+        if amount < 10:
+            await update.callback_query.message.edit_text(
+                f"❌ Withdrawal amount ${amount:.2f} is below minimum $10.\n\n"
+                f"Your current balance: ${current_balance:.2f}\n"
+                f"Try a custom amount or invest more first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="withdraw")]])
+            )
+            return
         
         context.user_data['pending_withdrawal'] = {
             'amount': amount,
-            'user_id': update.callback_query.from_user.id
+            'user_id': user.id
         }
         
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="withdraw")]]
@@ -636,6 +666,7 @@ async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAUL
         
         await update.callback_query.message.edit_text(
             f"💸 **Withdrawal Request: ${amount:,.2f}**\n\n"
+            f"This is {withdrawal_type}% of your current balance.\n\n"
             "Please provide your USDT wallet address (TRC20 network only):\n\n"
             "⚠️ **Important:**\n"
             "• Only TRC20 USDT addresses accepted\n"
@@ -645,6 +676,18 @@ async def handle_withdrawal_options(update: Update, context: ContextTypes.DEFAUL
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+        return
+    
+    # Handle stock withdrawal
+    elif withdrawal_type == "stocks":
+        await handle_stock_withdrawal(update, context)
+        return
+    
+    # Unknown withdrawal type
+    await update.callback_query.message.edit_text(
+        "❌ Unknown withdrawal option selected.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Withdraw Menu", callback_data="withdraw")]])
+    )
 
 async def show_live_prices_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show live prices menu"""
