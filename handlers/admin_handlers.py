@@ -59,7 +59,13 @@ Select an option below:
         await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
 async def get_realtime_price(ticker):
-    raise NotImplementedError
+    """Get realtime stock price - implement your actual price fetching here"""
+    try:
+         import yfinance as yf
+         stock = yf.Ticker(ticker)
+         return stock.history(period="1d")['Close'].iloc[-1]
+    except:
+         return 100.0  # Default price if API fails
 
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Master callback handler for all admin functions"""
@@ -221,7 +227,27 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 parse_mode='Markdown'
             )
 
+        elif data.startswith("admin_add_stock_ticker_"):
+            parts = data.split("_")
+            ticker = parts[4]
+            user_id = int(parts[5])
 
+            # Store state for manual input
+            context.user_data['manual_stock'] = {
+                'user_id': user_id,
+                'ticker': ticker,
+                'step': 'amount'
+            }
+            context.user_data['awaiting_manual_stock'] = True
+
+            keyboard = [[InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")]]
+            await update.callback_query.message.edit_text(
+                f"**ADD STOCK**\n\n"
+                f"Selected: {ticker}\n\n"
+                f"Step 2 of 3: Enter the amount (USD) to invest:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
         # Manual investment addition
         elif data == "admin_confirm_manual_investment":
             investment_data = context.user_data.get('manual_investment')
@@ -393,6 +419,26 @@ async def show_user_stocks_edit(update: Update, context: ContextTypes.DEFAULT_TY
             WHERE user_id = ? 
             ORDER BY investment_date DESC
         ''', (user_id,))
+        cursor.execute("PRAGMA table_info(stock_investments)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        # Adjust query based on actual columns
+        if 'shares_owned' in columns:
+            cursor.execute('''
+                SELECT id, amount_invested_usd, stock_ticker, purchase_price, shares_owned, status, investment_date
+                FROM stock_investments 
+                WHERE user_id = ? 
+                ORDER BY investment_date DESC
+            ''', (user_id,))
+        else:
+            # Fallback if shares_owned doesn't exist
+            cursor.execute('''
+                SELECT id, amount_invested_usd, stock_ticker, purchase_price, 1.0 as shares_owned, status, investment_date
+                FROM stock_investments 
+                WHERE user_id = ? 
+                ORDER BY investment_date DESC
+            ''', (user_id,))
+
         stocks = cursor.fetchall()
 
     user_data = db.get_user(user_id)

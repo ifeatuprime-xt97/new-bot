@@ -48,51 +48,56 @@ def main():
         write_timeout=30.0,
         pool_timeout=30.0
     )
-    
-    # Build application
+
+    # Build application (must be created before adding handlers)
     application = Application.builder().token(BOT_TOKEN).request(request).build()
-    
+
     # Add error handler
     application.add_error_handler(error_handler)
-    
+
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("portfolio", portfolio_command))
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("confirm_investment", confirm_investment_command))
     application.add_handler(CommandHandler("confirm_withdrawal", confirm_withdrawal_command))
+
+    # Admin-only text handler (specific) - register before general text handlers
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS),
+        handle_stock_edit_input
+    ))
+
+    # Admin manual stock input (specific)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_stock_input))
-    # Add callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
+
+    # Callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
     application.add_handler(CallbackQueryHandler(handle_callback_query))
-    
-    # Add message handlers
+
+    # General message handlers (user-facing)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
-    
-    application.add_handler(MessageHandler(
-    filters.TEXT & ~filters.COMMAND, 
-    handle_stock_edit_input
-    ))
+
     # Schedule daily profit calculation at midnight UTC
     job_queue = application.job_queue
     job_queue.run_daily(daily_profit_job, time=time(0, 0, 0))
-    
+
     logger.info("Bot is starting...")
     logger.info(f"Admin IDs configured: {ADMIN_USER_IDS}")
-    
+
     # Initialize database
     try:
         from database import db
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
-    
+
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='admin_balance_logs';")
         result = cursor.fetchone()
         print("Admin table exists:", result is not None)
-        
+
     # Start bot
     application.run_polling(allowed_updates=["message", "callback_query"])
 

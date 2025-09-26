@@ -235,6 +235,27 @@ class DatabaseManager:
             logging.error(f"Error creating/updating user {user_id}: {e}")
             return False
     
+    def add_stock(self, user_id, ticker, amount, price):
+        """Add stock investment to database"""
+        try:
+            shares = amount / price if price > 0 else 0
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO stock_investments 
+                    (user_id, stock_ticker, amount_invested_usd, purchase_price, shares_owned, 
+                    investment_date, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    user_id, ticker, amount, price, shares,
+                    datetime.now().isoformat(), 'confirmed'
+                ))
+                conn.commit()
+                return True
+        except Exception as e:
+            logging.error(f"Error adding stock: {e}")
+            return False
+
     def add_investment(self, user_id: int, amount: float, crypto_type: str, 
                       wallet_address: str, transaction_id: str, plan: str, notes: str = None) -> bool:
         """Add new investment record"""
