@@ -53,8 +53,6 @@ Select an option below:
     else:
         await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
-# Add these callback handlers to your handlers/admin_handlers.py
-
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Complete admin callback handler with all new features"""
     user = update.callback_query.from_user
@@ -175,7 +173,179 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
         )
 
-# Additional supporting functions
+async def setup_investment_status_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
+    """Setup investment status editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, status FROM investments WHERE id = ?', (inv_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Investment not found.")
+        return
+    
+    user_id, current_status = result
+    
+    context.user_data['investment_edit_data'] = {
+        'investment_id': inv_id,
+        'user_id': user_id,
+        'field': 'status'
+    }
+    context.user_data['awaiting_investment_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_inv_{inv_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"📊 **EDIT INVESTMENT STATUS**\n\n"
+        f"**Current Status:** {current_status.title()}\n\n"
+        f"Enter the new status:\n\n"
+        f"**Possible values:** pending, confirmed, rejected\n\n"
+        f"Type the new status below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def setup_investment_plan_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
+    """Setup investment plan editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, plan FROM investments WHERE id = ?', (inv_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Investment not found.")
+        return
+    
+    user_id, current_plan = result
+    
+    context.user_data['investment_edit_data'] = {
+        'investment_id': inv_id,
+        'user_id': user_id,
+        'field': 'plan'
+    }
+    context.user_data['awaiting_investment_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_inv_{inv_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"🎯 **EDIT INVESTMENT PLAN**\n\n"
+        f"**Current Plan:** {current_plan or 'None'}\n\n"
+        f"Enter the new plan name:\n\n"
+        f"**Examples:**\n"
+        f"• basic\n"
+        f"• standard\n"
+        f"• premium\n\n"
+        f"Type the new plan below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def setup_stock_amount_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Setup stock amount editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, amount_invested_usd FROM stock_investments WHERE id = ?', (stock_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, current_amount = result
+    
+    context.user_data['stock_edit_data'] = {
+        'stock_id': stock_id,
+        'user_id': user_id,
+        'field': 'amount'
+    }
+    context.user_data['awaiting_stock_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"💰 **EDIT STOCK AMOUNT**\n\n"
+        f"**Current Amount:** ${current_amount:,.2f}\n\n"
+        f"Enter the new amount invested:\n\n"
+        f"**Examples:**\n"
+        f"• 1000\n"
+        f"• 5500.50\n"
+        f"• 25000\n\n"
+        f"Type the new amount below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def setup_stock_price_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Setup stock price editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, current_price = result
+    
+    context.user_data['stock_edit_data'] = {
+        'stock_id': stock_id,
+        'user_id': user_id,
+        'field': 'price'
+    }
+    context.user_data['awaiting_stock_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"💲 **EDIT STOCK PRICE**\n\n"
+        f"**Current Price:** ${current_price:,.2f}\n\n"
+        f"Enter the new purchase price:\n\n"
+        f"**Examples:**\n"
+        f"• 150.75\n"
+        f"• 42.00\n"
+        f"• 500\n\n"
+        f"Type the new price below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def setup_stock_status_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Setup stock status editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, status FROM stock_investments WHERE id = ?', (stock_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, current_status = result
+    
+    context.user_data['stock_edit_data'] = {
+        'stock_id': stock_id,
+        'user_id': user_id,
+        'field': 'status'
+    }
+    context.user_data['awaiting_stock_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"📊 **EDIT STOCK STATUS**\n\n"
+        f"**Current Status:** {current_status.title()}\n\n"
+        f"Enter the new status:\n\n"
+        f"**Possible values:** pending, confirmed, rejected\n\n"
+        f"Type the new status below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 async def setup_regdate_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Setup registration date editing"""
@@ -367,7 +537,7 @@ async def handle_individual_edit_callback(update: Update, context: ContextTypes.
         stock_id = int(parts[-1])
         await setup_stock_status_edit(update, context, stock_id)
 
-    # --- STUBS FOR MISSING FUNCTIONS ---
+# --- STUBS FOR MISSING FUNCTIONS ---
 
 
 async def show_user_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
@@ -411,25 +581,6 @@ async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, us
     await update.callback_query.message.edit_text("[Stub] Add stock not implemented.")
 
 
-async def setup_investment_status_edit(update, context, inv_id):
-    """Stub: Setup investment status edit"""
-    await update.callback_query.message.edit_text("[Stub] Investment status edit not implemented.")
-
-async def setup_investment_plan_edit(update, context, inv_id):
-    """Stub: Setup investment plan edit"""
-    await update.callback_query.message.edit_text("[Stub] Investment plan edit not implemented.")
-
-async def setup_stock_amount_edit(update, context, stock_id):
-    """Stub: Setup stock amount edit"""
-    await update.callback_query.message.edit_text("[Stub] Stock amount edit not implemented.")
-
-async def setup_stock_price_edit(update, context, stock_id):
-    """Stub: Setup stock price edit"""
-    await update.callback_query.message.edit_text("[Stub] Stock price edit not implemented.")
-
-async def setup_stock_status_edit(update, context, stock_id):
-    """Stub: Setup stock status edit"""
-    await update.callback_query.message.edit_text("[Stub] Stock status edit not implemented.")
 
 async def setup_investment_amount_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
     """Setup investment amount editing"""
@@ -469,7 +620,7 @@ async def setup_investment_amount_edit(update: Update, context: ContextTypes.DEF
 
 # Similar setup functions for other fields would follow the same pattern...
 
-async def log_admin_action(admin_id: int, action_type: str, target_user_id: int = None, 
+def log_admin_action(admin_id: int, action_type: str, target_user_id: int = None, 
                           amount: float = None, old_balance: float = None, 
                           new_balance: float = None, notes: str = None):
     """Enhanced admin action logging"""
@@ -1510,19 +1661,3 @@ async def confirm_withdrawal_command(update: Update, context: ContextTypes.DEFAU
     
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Invalid command format. Use: /confirm_withdrawal <user_id>")
-
-def log_admin_action(admin_id: int, action_type: str, target_user_id: int = None, 
-                     amount: float = None, old_balance: float = None, 
-                     new_balance: float = None, notes: str = None):
-    """Log admin actions to database"""
-    try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO admin_balance_logs 
-                (admin_id, target_user_id, action_type, amount, old_balance, new_balance, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (admin_id, target_user_id, action_type, amount, old_balance, new_balance, notes))
-            conn.commit()
-    except Exception as e:
-        logging.error(f"Failed to log admin action: {e}")
