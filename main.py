@@ -8,9 +8,10 @@ from telegram.request import HTTPXRequest
 
 from config import BOT_TOKEN, ADMIN_USER_IDS
 from handlers.user_handlers import start_command, portfolio_command, calculate_user_profits
-from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command, handle_manual_stock_input
+from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command, handle_manual_stock_input,  handle_stock_edit_input
 from handlers.callback_handlers import handle_callback_query
 from handlers.message_handlers import handle_text_message
+
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +69,10 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     
+    application.add_handler(MessageHandler(
+    filters.TEXT & ~filters.COMMAND, 
+    handle_stock_edit_input
+    ))
     # Schedule daily profit calculation at midnight UTC
     job_queue = application.job_queue
     job_queue.run_daily(daily_profit_job, time=time(0, 0, 0))

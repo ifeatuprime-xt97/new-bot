@@ -162,7 +162,36 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("admin_clear_history_"):
             user_id = int(data.split("_")[-1])
             await clear_user_history(update, context, user_id)
-        
+        # Stock editing callbacks
+        elif data.startswith("admin_edit_stock_amount_"):
+            stock_id = int(data.split("_")[-1])
+            await setup_stock_amount_edit(update, context, stock_id)
+        elif data.startswith("admin_edit_stock_price_"):
+            stock_id = int(data.split("_")[-1])
+            await setup_stock_price_edit(update, context, stock_id)
+        elif data.startswith("admin_edit_stock_shares_"):
+            stock_id = int(data.split("_")[-1])
+            await setup_stock_shares_edit(update, context, stock_id)
+        elif data.startswith("admin_edit_stock_status_"):
+            stock_id = int(data.split("_")[-1])
+            await setup_stock_status_edit(update, context, stock_id)
+        elif data.startswith("admin_edit_stock_date_"):
+            stock_id = int(data.split("_")[-1])
+            await setup_stock_date_edit(update, context, stock_id)
+        elif data.startswith("admin_set_stock_status_"):
+            parts = data.split("_")
+            stock_id = int(parts[4])
+            status = parts[5]
+            await set_stock_status(update, context, stock_id, status)
+        elif data.startswith("admin_recalc_stock_"):
+            stock_id = int(data.split("_")[-1])
+            await recalculate_stock(update, context, stock_id)
+        elif data.startswith("admin_delete_stock_"):
+            stock_id = int(data.split("_")[-1])
+            await confirm_stock_deletion(update, context, stock_id)
+        elif data.startswith("admin_confirm_delete_stock_"):
+            stock_id = int(data.split("_")[-1])
+            await execute_stock_deletion(update, context, stock_id)
         # Balance management
         elif data.startswith("admin_balance_"):
             await handle_balance_edit_callback(update, context, data)
@@ -358,24 +387,61 @@ async def show_user_stocks_edit(update: Update, context: ContextTypes.DEFAULT_TY
     """Show a user's stock investments for editing."""
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT id, amount_invested_usd, stock_ticker, status FROM stock_investments WHERE user_id = ? ORDER BY investment_date DESC', (user_id,))
+        cursor.execute('''
+            SELECT id, amount_invested_usd, stock_ticker, purchase_price, shares_owned, status, investment_date
+            FROM stock_investments 
+            WHERE user_id = ? 
+            ORDER BY investment_date DESC
+        ''', (user_id,))
         stocks = cursor.fetchall()
 
+    user_data = db.get_user(user_id)
+    username = user_data[1] if user_data else str(user_id)
+
     if not stocks:
-        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
-        await update.callback_query.message.edit_text("This user has no stock investments.", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")],
+            [InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+        ]
+        await update.callback_query.message.edit_text(
+            f"📊 **STOCK INVESTMENTS**\n\n"
+            f"**User:** @{username}\n\n"
+            f"This user has no stock investments.\n\n"
+            f"Click 'Add Stock Investment' to add one manually.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
         return
 
-    text = "📝 **EDIT USER STOCKS**\n\nSelect a stock to manage:\n\n"
+    text = f"📊 **EDIT USER STOCKS**\n\n**User:** @{username}\n\n"
     keyboard = []
-    for stock_id, amount, ticker, status in stocks:
-        text += f"• ID {stock_id}: ${amount:,.2f} ({ticker}) - {status.title()}\n"
-        keyboard.append([InlineKeyboardButton(f"Edit Stock #{stock_id}", callback_data=f"admin_edit_stock_{stock_id}")])
+    
+    total_invested = 0
+    for stock_id, amount, ticker, price, shares, status, date in stocks:
+        total_invested += amount
+        current_value = amount  # You might want to calculate real-time value here
+        
+        text += f"**#{stock_id} - {ticker.upper()}**\n"
+        text += f"• Amount: ${amount:,.2f}\n"
+        text += f"• Price: ${price:,.2f}\n"
+        text += f"• Shares: {shares:.4f}\n"
+        text += f"• Status: {status.title()}\n"
+        text += f"• Date: {date[:10]}\n"
+        text += "─────────────────\n"
+        
+        keyboard.append([InlineKeyboardButton(
+            f"✏️ Edit {ticker.upper()}", 
+            callback_data=f"admin_edit_stock_{stock_id}"
+        )])
 
+    text += f"\n**Total Stock Value:** ${total_invested:,.2f}"
+    
     keyboard.append([InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
 
 async def show_user_transaction_history_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Display a user's full transaction history for an admin."""
@@ -559,19 +625,20 @@ async def setup_stock_amount_edit(update: Update, context: ContextTypes.DEFAULT_
     """Setup stock amount editing"""
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, amount_invested_usd FROM stock_investments WHERE id = ?', (stock_id,))
+        cursor.execute('SELECT user_id, amount_invested_usd, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
         result = cursor.fetchone()
     
     if not result:
         await update.callback_query.message.edit_text("❌ Stock investment not found.")
         return
     
-    user_id, current_amount = result
+    user_id, current_amount, ticker = result
     
     context.user_data['stock_edit_data'] = {
         'stock_id': stock_id,
         'user_id': user_id,
-        'field': 'amount'
+        'field': 'amount',
+        'ticker': ticker
     }
     context.user_data['awaiting_stock_edit'] = True
     
@@ -580,13 +647,14 @@ async def setup_stock_amount_edit(update: Update, context: ContextTypes.DEFAULT_
     
     await update.callback_query.message.edit_text(
         f"💰 **EDIT STOCK AMOUNT**\n\n"
+        f"**Stock:** {ticker.upper()}\n"
         f"**Current Amount:** ${current_amount:,.2f}\n\n"
-        f"Enter the new amount invested:\n\n"
+        f"Enter the new amount invested (USD):\n\n"
         f"**Examples:**\n"
         f"• 1000\n"
         f"• 5500.50\n"
         f"• 25000\n\n"
-        f"Type the new amount below:",
+        f"Type the new amount:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -595,19 +663,20 @@ async def setup_stock_price_edit(update: Update, context: ContextTypes.DEFAULT_T
     """Setup stock price editing"""
     with db.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT user_id, purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
+        cursor.execute('SELECT user_id, purchase_price, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
         result = cursor.fetchone()
     
     if not result:
         await update.callback_query.message.edit_text("❌ Stock investment not found.")
         return
     
-    user_id, current_price = result
+    user_id, current_price, ticker = result
     
     context.user_data['stock_edit_data'] = {
         'stock_id': stock_id,
         'user_id': user_id,
-        'field': 'price'
+        'field': 'price',
+        'ticker': ticker
     }
     context.user_data['awaiting_stock_edit'] = True
     
@@ -615,17 +684,418 @@ async def setup_stock_price_edit(update: Update, context: ContextTypes.DEFAULT_T
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.message.edit_text(
-        f"💲 **EDIT STOCK PRICE**\n\n"
+        f"💲 **EDIT PURCHASE PRICE**\n\n"
+        f"**Stock:** {ticker.upper()}\n"
         f"**Current Price:** ${current_price:,.2f}\n\n"
-        f"Enter the new purchase price:\n\n"
+        f"Enter the new purchase price per share:\n\n"
         f"**Examples:**\n"
         f"• 150.75\n"
         f"• 42.00\n"
-        f"• 500\n\n"
-        f"Type the new price below:",
+        f"• 500.25\n\n"
+        f"Type the new price:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+async def setup_stock_shares_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Setup stock shares editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, shares_owned, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, current_shares, ticker = result
+    
+    context.user_data['stock_edit_data'] = {
+        'stock_id': stock_id,
+        'user_id': user_id,
+        'field': 'shares',
+        'ticker': ticker
+    }
+    context.user_data['awaiting_stock_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"🔢 **EDIT SHARES OWNED**\n\n"
+        f"**Stock:** {ticker.upper()}\n"
+        f"**Current Shares:** {current_shares:.4f}\n\n"
+        f"Enter the new number of shares owned:\n\n"
+        f"**Examples:**\n"
+        f"• 10\n"
+        f"• 5.5\n"
+        f"• 100.25\n\n"
+        f"Type the new share count:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+async def setup_stock_status_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Setup stock status editing with buttons"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, status, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, current_status, ticker = result
+    
+    keyboard = [
+        [InlineKeyboardButton("⏳ Pending", callback_data=f"admin_set_stock_status_{stock_id}_pending")],
+        [InlineKeyboardButton("✅ Confirmed", callback_data=f"admin_set_stock_status_{stock_id}_confirmed")],
+        [InlineKeyboardButton("❌ Rejected", callback_data=f"admin_set_stock_status_{stock_id}_rejected")],
+        [InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"📊 **EDIT STOCK STATUS**\n\n"
+        f"**Stock:** {ticker.upper()}\n"
+        f"**Current Status:** {current_status.title()}\n\n"
+        f"Select the new status:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+async def setup_stock_date_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+        """Setup stock date editing"""
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id, investment_date, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
+            result = cursor.fetchone()
+        
+        if not result:
+            await update.callback_query.message.edit_text("❌ Stock investment not found.")
+            return
+        
+        user_id, current_date, ticker = result
+        
+        context.user_data['stock_edit_data'] = {
+            'stock_id': stock_id,
+            'user_id': user_id,
+            'field': 'date',
+            'ticker': ticker
+        }
+        context.user_data['awaiting_stock_edit'] = True
+        
+        keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_stock_{stock_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.callback_query.message.edit_text(
+            f"📅 **EDIT INVESTMENT DATE**\n\n"
+            f"**Stock:** {ticker.upper()}\n"
+            f"**Current Date:** {current_date[:10]}\n\n"
+            f"Enter the new investment date:\n\n"
+            f"**Format:** YYYY-MM-DD\n"
+            f"**Examples:**\n"
+            f"• 2024-01-15\n"
+            f"• 2024-03-20\n"
+            f"• 2023-12-01\n\n"
+            f"Type the new date:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+async def handle_stock_edit_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text input for stock editing"""
+    if not context.user_data.get('awaiting_stock_edit'):
+        return
+    
+    if update.effective_user.id not in ADMIN_USER_IDS:
+        return
+    
+    stock_data = context.user_data.get('stock_edit_data')
+    if not stock_data:
+        await update.message.reply_text("❌ Error: Stock editing data not found. Please start over.")
+        context.user_data.pop('awaiting_stock_edit', None)
+        return
+    
+    stock_id = stock_data['stock_id']
+    user_id = stock_data['user_id']
+    field = stock_data['field']
+    ticker = stock_data['ticker']
+    new_value = update.message.text.strip()
+    
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            if field == 'amount':
+                amount = float(new_value)
+                if amount <= 0:
+                    raise ValueError("Amount must be positive")
+                
+                # Get current price to recalculate shares
+                cursor.execute('SELECT purchase_price FROM stock_investments WHERE id = ?', (stock_id,))
+                price = cursor.fetchone()[0]
+                new_shares = amount / price
+                
+                cursor.execute('''
+                    UPDATE stock_investments 
+                    SET amount_invested_usd = ?, shares_owned = ?
+                    WHERE id = ?
+                ''', (amount, new_shares, stock_id))
+                
+                success_msg = f"Amount updated to ${amount:,.2f}\nShares recalculated to {new_shares:.4f}"
+                
+            elif field == 'price':
+                price = float(new_value)
+                if price <= 0:
+                    raise ValueError("Price must be positive")
+                
+                # Get current amount to recalculate shares
+                cursor.execute('SELECT amount_invested_usd FROM stock_investments WHERE id = ?', (stock_id,))
+                amount = cursor.fetchone()[0]
+                new_shares = amount / price
+                
+                cursor.execute('''
+                    UPDATE stock_investments 
+                    SET purchase_price = ?, shares_owned = ?
+                    WHERE id = ?
+                ''', (price, new_shares, stock_id))
+                
+                success_msg = f"Price updated to ${price:,.2f}\nShares recalculated to {new_shares:.4f}"
+                
+            elif field == 'shares':
+                shares = float(new_value)
+                if shares <= 0:
+                    raise ValueError("Shares must be positive")
+                
+                cursor.execute('''
+                    UPDATE stock_investments 
+                    SET shares_owned = ?
+                    WHERE id = ?
+                ''', (shares, stock_id))
+                
+                success_msg = f"Shares updated to {shares:.4f}"
+                
+            elif field == 'date':
+                # Validate date format
+                from datetime import datetime
+                parsed_date = datetime.strptime(new_value, '%Y-%m-%d')
+                date_str = parsed_date.isoformat()
+                
+                cursor.execute('''
+                    UPDATE stock_investments 
+                    SET investment_date = ?
+                    WHERE id = ?
+                ''', (date_str, stock_id))
+                
+                success_msg = f"Investment date updated to {new_value}"
+            
+            else:
+                await update.message.reply_text("❌ Unknown field to edit.")
+                return
+            
+            conn.commit()
+        
+        # Log the action
+        log_admin_action(
+            admin_id=update.effective_user.id,
+            action_type=f"stock_{field}_edit",
+            target_user_id=user_id,
+            notes=f"Stock {ticker} (ID: {stock_id}) - {field} changed to: {new_value}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Edit More", callback_data=f"admin_edit_stock_{stock_id}")],
+            [InlineKeyboardButton("📊 View Stocks", callback_data=f"admin_edit_stocks_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ **STOCK {field.upper()} UPDATED**\n\n"
+            f"**Stock:** {ticker.upper()}\n"
+            f"{success_msg}",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    except ValueError as e:
+        await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")
+        return  # Don't clear the state, let them try again
+    except Exception as e:
+        logging.error(f"Error updating stock {field}: {e}")
+        await update.message.reply_text(f"❌ Error updating {field}: {str(e)}")
+    finally:
+        context.user_data.pop('awaiting_stock_edit', None)
+        context.user_data.pop('stock_edit_data', None)
+async def set_stock_status(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int, new_status: str):
+    """Set stock investment status"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id, stock_ticker FROM stock_investments WHERE id = ?', (stock_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                await update.callback_query.message.edit_text("❌ Stock investment not found.")
+                return
+            
+            user_id, ticker = result
+            
+            cursor.execute('''
+                UPDATE stock_investments 
+                SET status = ?, confirmed_by = ?, confirmed_date = ?
+                WHERE id = ?
+            ''', (new_status, update.callback_query.from_user.id, datetime.now().isoformat(), stock_id))
+            conn.commit()
+        
+        # Log the action
+        log_admin_action(
+            admin_id=update.callback_query.from_user.id,
+            action_type="stock_status_change",
+            target_user_id=user_id,
+            notes=f"Stock {ticker} (ID: {stock_id}) status changed to: {new_status}"
+        )
+        
+        await update.callback_query.message.edit_text(
+            f"✅ **STATUS UPDATED**\n\n"
+            f"**Stock:** {ticker.upper()}\n"
+            f"**New Status:** {new_status.title()}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Edit More", callback_data=f"admin_edit_stock_{stock_id}")],
+                [InlineKeyboardButton("📊 View Stocks", callback_data=f"admin_edit_stocks_{user_id}")]
+            ]),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logging.error(f"Error setting stock status: {e}")
+        await update.callback_query.message.edit_text(f"❌ Error updating status: {str(e)}")
+async def recalculate_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Recalculate stock shares based on amount and price"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT user_id, stock_ticker, amount_invested_usd, purchase_price
+                FROM stock_investments WHERE id = ?
+            ''', (stock_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                await update.callback_query.message.edit_text("❌ Stock investment not found.")
+                return
+            
+            user_id, ticker, amount, price = result
+            new_shares = amount / price if price > 0 else 0
+            
+            cursor.execute('''
+                UPDATE stock_investments 
+                SET shares_owned = ?
+                WHERE id = ?
+            ''', (new_shares, stock_id))
+            conn.commit()
+        
+        await update.callback_query.message.edit_text(
+            f"🔄 **SHARES RECALCULATED**\n\n"
+            f"**Stock:** {ticker.upper()}\n"
+            f"**Amount:** ${amount:,.2f}\n"
+            f"**Price:** ${price:,.2f}\n"
+            f"**New Shares:** {new_shares:.4f}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Edit More", callback_data=f"admin_edit_stock_{stock_id}")],
+                [InlineKeyboardButton("📊 View Stocks", callback_data=f"admin_edit_stocks_{user_id}")]
+            ]),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logging.error(f"Error recalculating stock: {e}")
+        await update.callback_query.message.edit_text(f"❌ Error recalculating: {str(e)}")
+async def confirm_stock_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Confirm stock deletion"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT user_id, stock_ticker, amount_invested_usd, shares_owned
+            FROM stock_investments WHERE id = ?
+        ''', (stock_id,))
+        stock_data = cursor.fetchone()
+    
+    if not stock_data:
+        await update.callback_query.message.edit_text("❌ Stock investment not found.")
+        return
+    
+    user_id, ticker, amount, shares = stock_data
+    
+    keyboard = [
+        [InlineKeyboardButton("⚠️ YES, DELETE", callback_data=f"admin_confirm_delete_stock_{stock_id}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"admin_edit_stock_{stock_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"⚠️ **CONFIRM STOCK DELETION**\n\n"
+        f"**Stock:** {ticker.upper()}\n"
+        f"**Amount:** ${amount:,.2f}\n"
+        f"**Shares:** {shares:.4f}\n\n"
+        f"**⚠️ WARNING:** This will permanently delete this stock investment.\n\n"
+        f"**THIS CANNOT BE UNDONE!**\n\n"
+        f"Are you sure you want to delete this stock?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def execute_stock_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
+    """Execute stock deletion"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get stock details before deletion for logging
+            cursor.execute('''
+                SELECT user_id, stock_ticker, amount_invested_usd 
+                FROM stock_investments WHERE id = ?
+            ''', (stock_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                user_id, ticker, amount = result
+                
+                # Delete the stock investment
+                cursor.execute('DELETE FROM stock_investments WHERE id = ?', (stock_id,))
+                
+                # Update user's total invested (subtract the deleted amount)
+                cursor.execute('''
+                    UPDATE users 
+                    SET total_invested = total_invested - ?
+                    WHERE user_id = ?
+                ''', (amount, user_id))
+                
+                conn.commit()
+                
+                # Log the action
+                log_admin_action(
+                    admin_id=update.callback_query.from_user.id,
+                    action_type="stock_deletion",
+                    target_user_id=user_id,
+                    notes=f"Deleted stock {ticker} (ID: {stock_id}) worth ${amount:,.2f}"
+                )
+                
+                await update.callback_query.message.edit_text(
+                    f"✅ **STOCK DELETED**\n\n"
+                    f"Stock investment #{stock_id} ({ticker.upper()}) has been permanently deleted.\n\n"
+                    f"**Deleted Value:** ${amount:,.2f}",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📊 View Stocks", callback_data=f"admin_edit_stocks_{user_id}")],
+                        [InlineKeyboardButton("👤 User Profile", callback_data=f"admin_user_profile_{user_id}")]
+                    ]),
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.callback_query.message.edit_text("❌ Stock investment not found.")
+                
+    except Exception as e:
+        logging.error(f"Error deleting stock {stock_id}: {e}")
+        await update.callback_query.message.edit_text(f"❌ Error deleting stock: {str(e)}")
 
 async def setup_stock_status_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
     """Setup stock status editing"""
@@ -788,11 +1258,12 @@ async def show_investment_edit_menu(update: Update, context: ContextTypes.DEFAUL
     )
 
 async def show_stock_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
-    """Show stock editing menu"""
+    """Show individual stock editing menu"""
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT si.user_id, si.stock_ticker, si.amount_invested_usd, si.purchase_price, si.status, u.username
+            SELECT si.user_id, si.stock_ticker, si.amount_invested_usd, si.purchase_price, 
+                   si.shares_owned, si.status, si.investment_date, u.username
             FROM stock_investments si
             JOIN users u ON si.user_id = u.user_id
             WHERE si.id = ?
@@ -803,24 +1274,36 @@ async def show_stock_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.message.edit_text("❌ Stock investment not found.")
         return
     
-    user_id, ticker, amount, price, status, username = stock
+    user_id, ticker, amount, price, shares, status, date, username = stock
     
     keyboard = [
-        [InlineKeyboardButton("💰 Edit Amount", callback_data=f"admin_edit_stock_amount_{stock_id}")],
-        [InlineKeyboardButton("💲 Edit Price", callback_data=f"admin_edit_stock_price_{stock_id}")],
-        [InlineKeyboardButton("📊 Edit Status", callback_data=f"admin_edit_stock_status_{stock_id}")],
+        [InlineKeyboardButton("💰 Edit Amount", callback_data=f"admin_edit_stock_amount_{stock_id}"),
+         InlineKeyboardButton("💲 Edit Price", callback_data=f"admin_edit_stock_price_{stock_id}")],
+        [InlineKeyboardButton("📊 Edit Status", callback_data=f"admin_edit_stock_status_{stock_id}"),
+         InlineKeyboardButton("🔢 Edit Shares", callback_data=f"admin_edit_stock_shares_{stock_id}")],
+        [InlineKeyboardButton("📅 Edit Date", callback_data=f"admin_edit_stock_date_{stock_id}"),
+         InlineKeyboardButton("🔄 Recalculate", callback_data=f"admin_recalc_stock_{stock_id}")],
         [InlineKeyboardButton("🗑️ Delete Stock", callback_data=f"admin_delete_stock_{stock_id}")],
         [InlineKeyboardButton("🔙 Back", callback_data=f"admin_edit_stocks_{user_id}")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    current_value = shares * price  # Basic calculation
+    profit_loss = current_value - amount
+    profit_percentage = (profit_loss / amount * 100) if amount > 0 else 0
+    
     await update.callback_query.message.edit_text(
         f"✏️ **EDIT STOCK INVESTMENT**\n\n"
+        f"**Stock ID:** {stock_id}\n"
         f"**User:** @{username}\n"
-        f"**Stock:** {ticker.upper()}\n"
-        f"**Amount:** ${amount:,.2f}\n"
-        f"**Price:** ${price:,.2f}\n"
-        f"**Status:** {status.title()}\n\n"
+        f"**Ticker:** {ticker.upper()}\n"
+        f"**Amount Invested:** ${amount:,.2f}\n"
+        f"**Purchase Price:** ${price:,.2f}\n"
+        f"**Shares Owned:** {shares:.4f}\n"
+        f"**Status:** {status.title()}\n"
+        f"**Investment Date:** {date[:10]}\n\n"
+        f"**Current Value:** ${current_value:,.2f}\n"
+        f"**P/L:** ${profit_loss:+,.2f} ({profit_percentage:+.2f}%)\n\n"
         f"Select what to edit:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
