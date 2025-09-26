@@ -8,7 +8,7 @@ from telegram.request import HTTPXRequest
 
 from config import BOT_TOKEN, ADMIN_USER_IDS
 from handlers.user_handlers import start_command, portfolio_command, calculate_user_profits
-from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command
+from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command, handle_manual_stock_input
 from handlers.callback_handlers import handle_callback_query
 from handlers.message_handlers import handle_text_message
 
@@ -60,7 +60,7 @@ def main():
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("confirm_investment", confirm_investment_command))
     application.add_handler(CommandHandler("confirm_withdrawal", confirm_withdrawal_command))
-    
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_stock_input))
     # Add callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     

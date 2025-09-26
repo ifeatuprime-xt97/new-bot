@@ -352,6 +352,33 @@ class DatabaseManager:
             stats['pending_withdrawals'] = cursor.fetchone()[0]
             
             return stats
-
+        def add_manual_stock(self, admin_id, user_id, ticker, amount, price):
+            """Add manual stock investment by admin"""
+            try:
+                shares = amount / price
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO stock_investments 
+                        (user_id, stock_ticker, amount_invested_usd, purchase_price, shares_owned, 
+                        investment_date, status, confirmed_by, confirmed_date)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        user_id, ticker, amount, price, shares,
+                        datetime.now().isoformat(), 'confirmed', admin_id, datetime.now().isoformat()
+                    ))
+                    
+                    # Update user's total invested
+                    cursor.execute('''
+                        UPDATE users 
+                        SET total_invested = total_invested + ?
+                        WHERE user_id = ?
+                    ''', (amount, user_id))
+                    
+                    conn.commit()
+                    return True
+            except Exception as e:
+                logging.error(f"Error adding manual stock: {e}")
+                return False
 # Global database instance
 db = DatabaseManager()

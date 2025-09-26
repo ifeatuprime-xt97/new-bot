@@ -1,24 +1,29 @@
 """
-Admin command handlers - Complete functionality
+Admin command handlers - Complete functionality with full user management
 """
 import logging
 import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-
-from .message_handlers import handle_broadcast_confirmation_callback
-from handlers.message_handlers import confirm_balance_change
-
-from .message_handlers import handle_balance_confirmation_callback
+import random
+from config import ALL_STOCKS
 from config import ADMIN_USER_IDS
 from database import db
+from .utils import log_admin_action
+
+from .message_handlers import (
+    confirm_balance_change,
+    handle_balance_confirmation_callback,
+    handle_broadcast_confirmation_callback,
+)
+
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /admin command - Main admin panel"""
+    """Main admin panel command"""
     user = update.effective_user
     if user.id not in ADMIN_USER_IDS:
-        await update.message.reply_text("❌ You do not have permission to access the admin panel.")
+        await update.message.reply_text("Access denied. Admin permissions required.")
         return
     
     keyboard = [
@@ -37,9 +42,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     stats = db.get_user_stats()
     text = f"""
-🛠️ **ADMIN CONTROL PANEL**
+**ADMIN CONTROL PANEL**
 
-📊 **Quick Stats:**
+**Quick Stats:**
 • Total Users: {stats.get('total_users', 0)}
 • Active Investors: {stats.get('active_investors', 0)}
 • Pending Investments: {stats.get('pending_investments', 0)}
@@ -53,125 +58,433 @@ Select an option below:
     else:
         await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
+async def get_realtime_price(ticker):
+    raise NotImplementedError
+
 async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
-    """Complete admin callback handler with all new features"""
+    """Master callback handler for all admin functions"""
     user = update.callback_query.from_user
     if user.id not in ADMIN_USER_IDS:
-        await update.callback_query.message.edit_text("❌ Access denied.")
+        await update.callback_query.message.edit_text("Access denied.")
         return
     
-    # Parse callback data
-    if data == "admin_panel":
-        await admin_command(update, context)
-    elif data == "admin_investments":
-        await show_pending_investments(update, context)
-    elif data == "admin_withdrawals":
-        await show_pending_withdrawals(update, context)
-    elif data == "admin_stock_investments":
-        await show_pending_stock_investments(update, context)
-    elif data == "admin_stock_sales":
-        await show_pending_stock_sales(update, context)
-    elif data == "admin_user_management":
-        await show_user_management(update, context)
-    elif data == "admin_user_stats":
-        await show_user_stats(update, context)
-    elif data == "admin_edit_balance":
-        await show_balance_edit_menu(update, context)
-    elif data == "admin_search_user":
-        await setup_user_search(update, context)
-    elif data == "admin_broadcast":
-        await setup_broadcast_message(update, context)
-    elif data == "admin_logs":
-        await show_admin_logs(update, context)
-    elif data == "admin_user_list":
-        await show_user_list(update, context, 0)
-    elif data.startswith("admin_user_list_"):
-        page = int(data.split("_")[-1])
-        await show_user_list(update, context, page)
-    elif data.startswith("admin_user_profile_"):
-        user_id = int(data.split("_")[-1])
-        await show_user_profile(update, context, user_id)
-    elif data == "admin_confirm_balance_change":
-        await handle_balance_confirmation_callback(update, context)
-    elif data == "admin_confirm_broadcast":
-        await handle_broadcast_confirmation_callback(update, context)
-    elif data.startswith("admin_confirm_"):
-        await handle_admin_confirmation(update, context, data)
-    elif data.startswith("admin_reject_"):
-        await handle_admin_rejection(update, context, data)
-    elif data.startswith("admin_balance_"):
-        await handle_balance_edit_callback(update, context, data)
-    elif data.startswith("admin_edit_profile_"):
-        user_id = int(data.split("_")[-1])
-        await show_user_edit_profile_menu(update, context, user_id)
-    elif data.startswith("admin_edit_investments_"):
-        user_id = int(data.split("_")[-1])
-        await show_user_investments_edit(update, context, user_id)
-    elif data.startswith("admin_edit_stocks_"):
-        user_id = int(data.split("_")[-1])
-        await show_user_stocks_edit(update, context, user_id)
-    elif data.startswith("admin_user_history_"):
-        user_id = int(data.split("_")[-1])
-        await show_user_transaction_history_admin(update, context, user_id)
-    elif data.startswith("admin_edit_name_"):
-        user_id = int(data.split("_")[-1])
-        await setup_name_edit(update, context, user_id)
-    elif data.startswith("admin_edit_email_"):
-        user_id = int(data.split("_")[-1])
-        await setup_email_edit(update, context, user_id)
-    elif data.startswith("admin_edit_regdate_"):
-        user_id = int(data.split("_")[-1])
-        await setup_regdate_edit(update, context, user_id)
-    elif data.startswith("admin_edit_plan_"):
-        user_id = int(data.split("_")[-1])
-        await show_plan_edit_menu(update, context, user_id)
-    elif data.startswith("admin_set_plan_"):
-        parts = data.split("_")
-        user_id = int(parts[3])
-        plan = parts[4] if parts[4] != 'NONE' else None
-        await set_user_plan(update, context, user_id, plan)
-    elif data.startswith("admin_reset_refcode_"):
-        user_id = int(data.split("_")[-1])
-        await reset_referral_code(update, context, user_id)
-    elif data.startswith("admin_delete_user_"):
-        user_id = int(data.split("_")[-1])
-        await confirm_user_deletion(update, context, user_id)
-    elif data.startswith("admin_edit_inv_"):
-        inv_id = int(data.split("_")[-1])
-        await show_investment_edit_menu(update, context, inv_id)
-    elif data.startswith("admin_edit_stock_"):
-        stock_id = int(data.split("_")[-1])
-        await show_stock_edit_menu(update, context, stock_id)
-    elif data.startswith("admin_add_investment_"):
-        user_id = int(data.split("_")[-1])
-        await setup_add_investment(update, context, user_id)
-    elif data.startswith("admin_add_stock_"):
-        user_id = int(data.split("_")[-1])
-        await setup_add_stock(update, context, user_id)
-    # --- NEW CASES FOR FIELD EDITS ---
-    elif data.startswith("admin_edit_inv_amount_"):
-        inv_id = int(data.split("_")[-1])
-        await setup_investment_amount_edit(update, context, inv_id)
-    elif data.startswith("admin_edit_inv_status_"):
-        inv_id = int(data.split("_")[-1])
-        await setup_investment_status_edit(update, context, inv_id)
-    elif data.startswith("admin_edit_inv_plan_"):
-        inv_id = int(data.split("_")[-1])
-        await setup_investment_plan_edit(update, context, inv_id)
-    elif data.startswith("admin_edit_stock_amount_"):
-        stock_id = int(data.split("_")[-1])
-        await setup_stock_amount_edit(update, context, stock_id)
-    elif data.startswith("admin_edit_stock_price_"):
-        stock_id = int(data.split("_")[-1])
-        await setup_stock_price_edit(update, context, stock_id)
-    elif data.startswith("admin_edit_stock_status_"):
-        stock_id = int(data.split("_")[-1])
-        await setup_stock_status_edit(update, context, stock_id)
-    else:
+    try:
+        # Main admin functions
+        if data == "admin_panel":
+            await admin_command(update, context)
+        elif data == "admin_investments":
+            await show_pending_investments(update, context)
+        elif data == "admin_withdrawals":
+            await show_pending_withdrawals(update, context)
+        elif data == "admin_stock_investments":
+            await show_pending_stock_investments(update, context)
+        elif data == "admin_stock_sales":
+            await show_pending_stock_sales(update, context)
+        elif data == "admin_user_management":
+            await show_user_management(update, context)
+        elif data == "admin_user_stats":
+            await show_user_stats(update, context)
+        elif data == "admin_edit_balance":
+            await show_balance_edit_menu(update, context)
+        elif data == "admin_search_user":
+            await setup_user_search(update, context)
+        elif data == "admin_broadcast":
+            await setup_broadcast_message(update, context)
+        elif data == "admin_logs":
+            await show_admin_logs(update, context)
+        
+        # User management
+        elif data == "admin_user_list":
+            await show_user_list(update, context, 0)
+        elif data.startswith("admin_user_list_"):
+            page = int(data.split("_")[-1])
+            await show_user_list(update, context, page)
+        elif data.startswith("admin_user_profile_"):
+            user_id = int(data.split("_")[-1])
+            await show_user_profile(update, context, user_id)
+        
+        # Profile editing
+        elif data.startswith("admin_edit_profile_"):
+            user_id = int(data.split("_")[-1])
+            await show_user_edit_profile_menu(update, context, user_id)
+        elif data.startswith("admin_edit_name_"):
+            user_id = int(data.split("_")[-1])
+            await setup_name_edit(update, context, user_id)
+        elif data.startswith("admin_edit_email_"):
+            user_id = int(data.split("_")[-1])
+            await setup_email_edit(update, context, user_id)
+        elif data.startswith("admin_edit_regdate_"):
+            user_id = int(data.split("_")[-1])
+            await setup_regdate_edit(update, context, user_id)
+        elif data.startswith("admin_edit_plan_"):
+            user_id = int(data.split("_")[-1])
+            await show_plan_edit_menu(update, context, user_id)
+        elif data.startswith("admin_set_plan_"):
+            parts = data.split("_")
+            user_id = int(parts[3])
+            plan = parts[4] if parts[4] != 'NONE' else None
+            await set_user_plan(update, context, user_id, plan)
+        elif data.startswith("admin_reset_refcode_"):
+            user_id = int(data.split("_")[-1])
+            await reset_referral_code(update, context, user_id)
+        elif data.startswith("admin_edit_profits_"):
+            user_id = int(data.split("_")[-1])
+            await setup_profit_edit(update, context, user_id)
+        
+        # Investment and stock management
+        elif data.startswith("admin_edit_investments_"):
+            user_id = int(data.split("_")[-1])
+            await show_user_investments_edit(update, context, user_id)
+        elif data.startswith("admin_edit_stocks_"):
+            user_id = int(data.split("_")[-1])
+            await show_user_stocks_edit(update, context, user_id)
+        elif data.startswith("admin_user_history_"):
+            user_id = int(data.split("_")[-1])
+            await show_user_transaction_history_admin(update, context, user_id)
+        elif data.startswith("admin_add_investment_"):
+            user_id = int(data.split("_")[-1])
+            await setup_add_investment(update, context, user_id)
+        elif data.startswith("admin_add_stock_"):
+            user_id = int(data.split("_")[-1])
+            await setup_add_stock(update, context, user_id)
+        elif data.startswith("admin_edit_inv_"):
+            inv_id = int(data.split("_")[-1])
+            await show_investment_edit_menu(update, context, inv_id)
+        elif data.startswith("admin_edit_stock_"):
+            stock_id = int(data.split("_")[-1])
+            await show_stock_edit_menu(update, context, stock_id)
+        elif data.startswith("admin_delete_user_"):
+            user_id = int(data.split("_")[-1])
+            await confirm_user_deletion(update, context, user_id)
+        elif data.startswith("admin_confirm_delete_"):
+            user_id = int(data.split("_")[-1])
+            await execute_user_deletion(update, context, user_id)
+        elif data.startswith("admin_clear_history_"):
+            user_id = int(data.split("_")[-1])
+            await clear_user_history(update, context, user_id)
+        
+        # Balance management
+        elif data.startswith("admin_balance_"):
+            await handle_balance_edit_callback(update, context, data)
+        elif data == "admin_confirm_balance_change":
+            await handle_balance_confirmation_callback(update, context)
+        elif data.startswith("admin_edit_user_balance_"):
+            user_id = int(data.split("_")[-1])
+            await setup_user_balance_edit(update, context, user_id)
+        elif data.startswith("admin_add_stock_ticker_"):
+            parts = data.split("_")
+            ticker = parts[4]
+            user_id = int(parts[5])
+
+            # Store state
+            context.user_data['manual_stock'] = {
+                'user_id': user_id,
+                'ticker': ticker,
+                'step': 'amount'
+            }
+
+            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")]]
+            await update.callback_query.message.edit_text(
+                f"💰 **ADD STOCK**\n\n"
+                f"✅ Selected: {ticker}\n\n"
+                f"Step 2 of 3: Enter the amount (USD) to invest:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+
+
+        # Manual investment addition
+        elif data == "admin_confirm_manual_investment":
+            investment_data = context.user_data.get('manual_investment')
+            if not investment_data:
+                await update.callback_query.message.edit_text("❌ Error: Investment data not found. Please start over.")
+                return
+
+            # Use the existing db.confirm_investment logic or a new dedicated function
+            success, message = db.add_manual_investment(
+                admin_id=update.callback_query.from_user.id,
+                user_id=investment_data['user_id'],
+                amount=investment_data['amount'],
+                crypto_type=investment_data['crypto_type'],
+                plan=investment_data['plan']
+            )
+
+            if success:
+                await update.callback_query.message.edit_text(
+                    f"✅ Investment of ${investment_data['amount']:,.2f} successfully added for user {investment_data['user_id']}.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👤 View Profile", callback_data=f"admin_user_profile_{investment_data['user_id']}")]]))
+            else:
+                await update.callback_query.message.edit_text(f"❌ Failed to add investment: {message}")
+            
+            context.user_data.pop('manual_investment', None)
+
+        elif data.startswith("admin_add_stock_page_"):
+            parts = data.split("_")
+            # ["admin", "add", "stock", "page", "<user_id>", "<page>"]
+            user_id = int(parts[4])   # correct index for user_id
+            page = int(parts[5])      # correct index for page
+            await setup_add_stock(update, context, user_id, page)
+
+
+        elif data.startswith("admin_add_stock_ticker_"):
+            parts = data.split("_")
+            # ["admin", "add", "stock", "ticker", "<ticker>", "<user_id>"]
+            ticker = parts[4]
+            user_id = int(parts[5])
+
+            # ✅ fetch realtime price from your API helper
+            try:
+                price = await get_realtime_price(ticker)   # <-- you should have this function already
+            except Exception as e:
+                await update.callback_query.message.edit_text(
+                    f"❌ Could not fetch price for {ticker}. Error: {e}"
+                )
+                return
+
+            amount = 1  # default amount (or however you want to define it)
+
+            # ✅ Save to DB
+            db.add_stock(user_id, ticker, amount, price)
+
+            # ✅ Confirmation message
+            keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+            await update.callback_query.message.edit_text(
+                f"✅ Stock added successfully!\n\n"
+                f"📊 Ticker: {ticker}\n"
+                f"💵 Current Price: ${price:,.2f}\n"
+                f"📈 Amount: {amount}",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+
+
+                # Add this elif block to your handle_admin_callback function
+        elif data == "admin_confirm_manual_stock":
+            stock_data = context.user_data.get('manual_stock')
+            if not stock_data:
+                await update.callback_query.message.edit_text("❌ Error: Stock data not found. Please start over.")
+                return
+
+            try:
+                # This function should be created in your database.py file
+                db.add_manual_stock(
+                    admin_id=update.callback_query.from_user.id,
+                    user_id=stock_data['user_id'],
+                    ticker=stock_data['ticker'],
+                    amount=stock_data['amount'],
+                    price=stock_data['price']
+                )
+                await update.callback_query.message.edit_text(
+                    f"✅ Stock investment in {stock_data['ticker']} successfully added for user {stock_data['user_id']}.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👤 View Profile", callback_data=f"admin_user_profile_{stock_data['user_id']}")]]))
+                
+            except Exception as e:
+                await update.callback_query.message.edit_text(f"❌ Failed to add stock: {e}")
+            
+            context.user_data.pop('manual_stock', None)
+
+        # Confirmations and rejections
+        elif data.startswith("admin_confirm_"):
+            await handle_admin_confirmation(update, context, data)
+        elif data.startswith("admin_reject_"):
+            await handle_admin_rejection(update, context, data)
+        
+        # Broadcasting
+        elif data == "admin_confirm_broadcast":
+            await handle_broadcast_confirmation_callback(update, context)
+        
+        else:
+            await update.callback_query.message.edit_text(
+                "Unknown admin action.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Admin Panel", callback_data="admin_panel")]])
+            )
+
+            
+    
+    except Exception as e:
+        logging.error(f"Admin callback error for '{data}': {e}")
         await update.callback_query.message.edit_text(
-            "❌ Unknown admin action.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
+            f"Error processing admin action: {str(e)}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Admin Panel", callback_data="admin_panel")]])
         )
+
+async def setup_profit_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Setup profit earned editing for a user."""
+    user_data = db.get_user(user_id)
+    if not user_data:
+        await update.callback_query.message.edit_text("❌ User not found.")
+        return
+        
+    current_profit = user_data[9]  # profit_earned column
+    
+    context.user_data['edit_user_id'] = user_id
+    context.user_data['edit_field'] = 'profit'
+    context.user_data['awaiting_user_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_profile_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"💰 **EDIT USER PROFIT**\n\n"
+        f"**Current Profit:** ${current_profit:,.2f}\n\n"
+        f"Enter the new total profit amount for this user. This is a direct override.",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_user_investments_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Show a user's crypto investments for editing."""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, amount, crypto_type, status FROM investments WHERE user_id = ? ORDER BY investment_date DESC', (user_id,))
+        investments = cursor.fetchall()
+
+    if not investments:
+        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+        await update.callback_query.message.edit_text("This user has no crypto investments.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "📝 **EDIT USER INVESTMENTS**\n\nSelect an investment to manage:\n\n"
+    keyboard = []
+    for inv_id, amount, crypto, status in investments:
+        text += f"• ID {inv_id}: ${amount:,.2f} ({crypto}) - {status.title()}\n"
+        keyboard.append([InlineKeyboardButton(f"Edit Investment #{inv_id}", callback_data=f"admin_edit_inv_{inv_id}")])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_user_stocks_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Show a user's stock investments for editing."""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, amount_invested_usd, stock_ticker, status FROM stock_investments WHERE user_id = ? ORDER BY investment_date DESC', (user_id,))
+        stocks = cursor.fetchall()
+
+    if not stocks:
+        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+        await update.callback_query.message.edit_text("This user has no stock investments.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "📝 **EDIT USER STOCKS**\n\nSelect a stock to manage:\n\n"
+    keyboard = []
+    for stock_id, amount, ticker, status in stocks:
+        text += f"• ID {stock_id}: ${amount:,.2f} ({ticker}) - {status.title()}\n"
+        keyboard.append([InlineKeyboardButton(f"Edit Stock #{stock_id}", callback_data=f"admin_edit_stock_{stock_id}")])
+
+    keyboard.append([InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_user_transaction_history_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Display a user's full transaction history for an admin."""
+    # This is a simplified example. A full implementation would use UNION across multiple tables.
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT 'Investment' as type, amount, status, investment_date as date 
+            FROM investments WHERE user_id = ?
+            UNION ALL
+            SELECT 'Withdrawal' as type, amount, status, withdrawal_date as date 
+            FROM withdrawals WHERE user_id = ?
+            ORDER BY date DESC LIMIT 10
+        ''', (user_id, user_id))
+        history = cursor.fetchall()
+
+    if not history:
+        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+        await update.callback_query.message.edit_text("No transaction history found for this user.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "📜 **USER TRANSACTION HISTORY**\n\n"
+    for type, amount, status, date in history:
+        text += f"**{type}** - ${amount:,.2f}\n"
+        text += f"Status: {status.title()} | Date: {date[:10]}\n"
+        text += "──────────\n"
+
+    keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+
+async def execute_user_deletion(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Permanently delete a user and all their data."""
+    admin_id = update.callback_query.from_user.id
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            # It's crucial to delete from all related tables
+            cursor.execute('DELETE FROM investments WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM withdrawals WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM stock_investments WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM stock_sales WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM referrals WHERE referrer_id = ? OR referred_id = ?', (user_id, user_id))
+            cursor.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
+            conn.commit()
+
+        log_admin_action(
+            admin_id=admin_id,
+            action_type="user_deletion",
+            target_user_id=user_id,
+            notes="User account and all associated data permanently deleted."
+        )
+        await update.callback_query.message.edit_text(
+            f"✅ **USER DELETED**\n\nUser ID {user_id} has been permanently removed from the database.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 User Management", callback_data="admin_user_management")]])
+        )
+    except Exception as e:
+        logging.error(f"Error deleting user {user_id}: {e}")
+        await update.callback_query.message.edit_text(f"❌ An error occurred during deletion: {e}")
+
+async def clear_user_history(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Clear all transaction history for a user."""
+    admin_id = update.callback_query.from_user.id
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM investments WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM withdrawals WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM stock_investments WHERE user_id = ?', (user_id,))
+            cursor.execute('DELETE FROM stock_sales WHERE user_id = ?', (user_id,))
+            conn.commit()
+
+        log_admin_action(
+            admin_id=admin_id,
+            action_type="history_clear",
+            target_user_id=user_id,
+            notes="User transaction history cleared."
+        )
+        await update.callback_query.message.edit_text(
+            f"✅ **HISTORY CLEARED**\n\nAll transaction history for user {user_id} has been deleted.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]))
+    except Exception as e:
+        logging.error(f"Error clearing history for user {user_id}: {e}")
+        await update.callback_query.message.edit_text(f"❌ An error occurred while clearing history: {e}")
+
+async def setup_user_balance_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Setup balance editing directly from a user's profile."""
+    user_data = db.get_user(user_id)
+    if not user_data:
+        await update.callback_query.message.edit_text("❌ User not found.")
+        return
+
+    context.user_data['balance_target_user'] = user_data
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Add Balance", callback_data="admin_balance_direct_add")],
+        [InlineKeyboardButton("➖ Subtract Balance", callback_data="admin_balance_direct_subtract")],
+        [InlineKeyboardButton("🎯 Set Balance", callback_data="admin_balance_direct_set")],
+        [InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.callback_query.message.edit_text(
+        f"💳 **EDIT BALANCE** for @{user_data[1]}\n\n"
+        f"Current Balance: ${user_data[8]:,.2f}\n\n"
+        "Choose an action:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )                         
 
 async def setup_investment_status_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
     """Setup investment status editing"""
@@ -537,104 +850,7 @@ async def handle_individual_edit_callback(update: Update, context: ContextTypes.
         stock_id = int(parts[-1])
         await setup_stock_status_edit(update, context, stock_id)
 
-# --- STUBS FOR MISSING FUNCTIONS ---
 
-
-async def show_user_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Show user edit profile menu"""
-    await update.callback_query.message.edit_text("[Stub] Edit profile menu not implemented.")
-
-async def show_user_investments_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Show user investments edit menu"""
-    await update.callback_query.message.edit_text("[Stub] Edit investments menu not implemented.")
-
-async def show_user_stocks_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Show user stocks edit menu"""
-    await update.callback_query.message.edit_text("[Stub] Edit stocks menu not implemented.")
-
-async def show_user_transaction_history_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Show user transaction history for admin"""
-    await update.callback_query.message.edit_text("[Stub] Transaction history not implemented.")
-
-async def setup_name_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Setup name edit"""
-    await update.callback_query.message.edit_text("[Stub] Name edit not implemented.")
-
-async def setup_email_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Setup email edit"""
-    await update.callback_query.message.edit_text("[Stub] Email edit not implemented.")
-
-async def show_plan_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Show plan edit menu"""
-    await update.callback_query.message.edit_text("[Stub] Plan edit menu not implemented.")
-
-async def reset_referral_code(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Reset referral code"""
-    await update.callback_query.message.edit_text("[Stub] Referral code reset not implemented.")
-
-async def setup_add_investment(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Setup add investment"""
-    await update.callback_query.message.edit_text("[Stub] Add investment not implemented.")
-
-async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Stub: Setup add stock"""
-    await update.callback_query.message.edit_text("[Stub] Add stock not implemented.")
-
-
-
-async def setup_investment_amount_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
-    """Setup investment amount editing"""
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id, amount FROM investments WHERE id = ?', (inv_id,))
-        result = cursor.fetchone()
-    
-    if not result:
-        await update.callback_query.message.edit_text("❌ Investment not found.")
-        return
-    
-    user_id, current_amount = result
-    
-    context.user_data['investment_edit_data'] = {
-        'investment_id': inv_id,
-        'user_id': user_id,
-        'field': 'amount'
-    }
-    context.user_data['awaiting_investment_edit'] = True
-    
-    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_inv_{inv_id}")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.callback_query.message.edit_text(
-        f"💰 **EDIT INVESTMENT AMOUNT**\n\n"
-        f"**Current Amount:** ${current_amount:,.2f}\n\n"
-        f"Enter the new investment amount:\n\n"
-        f"**Examples:**\n"
-        f"• 1000\n"
-        f"• 5500.50\n"
-        f"• 25000\n\n"
-        f"Type the new amount below:",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
-# Similar setup functions for other fields would follow the same pattern...
-
-def log_admin_action(admin_id: int, action_type: str, target_user_id: int = None, 
-                          amount: float = None, old_balance: float = None, 
-                          new_balance: float = None, notes: str = None):
-    """Enhanced admin action logging"""
-    try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO admin_balance_logs 
-                (admin_id, target_user_id, action_type, amount, old_balance, new_balance, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (admin_id, target_user_id, action_type, amount, old_balance, new_balance, notes))
-            conn.commit()
-    except Exception as e:
-        logging.error(f"Failed to log admin action: {e}")
 
 async def show_pending_investments(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show pending crypto investments"""
@@ -992,7 +1208,7 @@ async def show_user_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_admin_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show recent admin activity logs"""
+    """Display recent admin activity logs"""
     with db.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
@@ -1003,36 +1219,46 @@ async def show_admin_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
             LEFT JOIN users u1 ON abl.admin_id = u1.user_id
             LEFT JOIN users u2 ON abl.target_user_id = u2.user_id
             ORDER BY abl.timestamp DESC
-            LIMIT 10
+            LIMIT 15
         ''')
         logs = cursor.fetchall()
     
     if not logs:
-        text = "📋 **ADMIN LOGS**\n\nNo admin activity logged yet."
+        text = "**ADMIN ACTIVITY LOGS**\n\nNo admin activity recorded yet."
     else:
-        text = "📋 **RECENT ADMIN ACTIVITY**\n\n"
+        text = "**RECENT ADMIN ACTIVITY**\n\n"
         
         for log in logs:
             timestamp, admin_id, admin_username, target_id, target_username, action, amount, old_bal, new_bal, notes = log
             
             text += f"**{timestamp[:16]}**\n"
-            text += f"Admin: @{admin_username or admin_id}\n"
-            text += f"Action: {action}\n"
-            text += f"Target: @{target_username or target_id}\n"
-            if amount:
+            text += f"Admin: @{admin_username or str(admin_id)}\n"
+            text += f"Action: {action.replace('_', ' ').title()}\n"
+            
+            if target_id:
+                text += f"Target: @{target_username or str(target_id)}\n"
+            
+            if amount is not None:
                 text += f"Amount: ${amount:,.2f}\n"
+            
+            if old_bal is not None and new_bal is not None:
                 text += f"Balance: ${old_bal:,.2f} → ${new_bal:,.2f}\n"
+            
             if notes:
-                text += f"Notes: {notes}\n"
-            text += "─────────────\n"
+                text += f"Notes: {notes[:50]}{'...' if len(notes) > 50 else ''}\n"
+            
+            text += "─" * 20 + "\n"
     
     keyboard = [
-        [InlineKeyboardButton("🔄 Refresh", callback_data="admin_logs")],
-        [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        [InlineKeyboardButton("Refresh Logs", callback_data="admin_logs"),
+         InlineKeyboardButton("Export Logs", callback_data="admin_export_logs")],
+        [InlineKeyboardButton("Clear Old Logs", callback_data="admin_clear_logs"),
+         InlineKeyboardButton("Admin Panel", callback_data="admin_panel")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
 
 async def handle_admin_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Handle admin confirmations"""
@@ -1488,43 +1714,239 @@ async def show_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         recent_activity = cursor.fetchall()
     
     text = f"""
-👤 **USER PROFILE - {full_name or username}**
+👤 **USER PROFILE**
 
-📋 **Personal Info:**
+📋 **Info:**
 • ID: {user_id}
 • Username: @{username or 'N/A'}
-• Full Name: {full_name or 'N/A'}
+• Name: {full_name or 'N/A'}
 • Email: {email or 'N/A'}
-• Member Since: {reg_date[:10] if reg_date else 'Unknown'}
+• Joined: {reg_date[:10] if reg_date else 'Unknown'}
 
-💼 **Account Summary:**
-• Plan: {plan or 'No active plan'}
-• Total Invested: ${total_invested:,.2f}
-• Current Balance: ${current_balance:,.2f}
-• Total Profit: ${profit_earned:,.2f}
-
-📊 **Activity Stats:**
-• Confirmed Investments: {investment_count}
-• Referrals Made: {referral_count}
-• Referral Code: {referral_code}
-
-🔄 **Recent Activity:**
+💼 **Account:**
+• Plan: {plan or 'None'}
+• Invested: ${total_invested:,.2f}
+• Balance: ${current_balance:,.2f}
+• Profit: ${profit_earned:,.2f}
+• Referral: {referral_code}
     """
     
-    for activity in recent_activity:
-        activity_type, amount, date = activity
-        text += f"• {activity_type.title()}: ${amount:,.2f} ({date[:10]})\n"
-    
     keyboard = [
-        [InlineKeyboardButton("💳 Edit Balance", callback_data=f"admin_edit_user_balance_{user_id}"),
-         InlineKeyboardButton("📊 Full History", callback_data=f"admin_user_history_{user_id}")],
-        [InlineKeyboardButton("💬 Send Message", callback_data=f"admin_message_user_{user_id}"),
-         InlineKeyboardButton("🚫 Ban User", callback_data=f"admin_ban_user_{user_id}")],
+        [InlineKeyboardButton("✏️ Edit Profile", callback_data=f"admin_edit_profile_{user_id}")],
+        [InlineKeyboardButton("✏️ Edit Stocks", callback_data=f"admin_edit_stocks_{user_id}")],
+        [InlineKeyboardButton("💳 Edit Balance", callback_data=f"admin_edit_user_balance_{user_id}")],
+        [InlineKeyboardButton("✏️ Edit Investment", callback_data=f"admin_edit_investments_{user_id}")],
         [InlineKeyboardButton("🔙 User List", callback_data="admin_user_list")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
+
+async def show_user_edit_profile_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Show profile editing menu"""
+    keyboard = [
+        [InlineKeyboardButton("👤 Edit Name", callback_data=f"admin_edit_name_{user_id}"),
+         InlineKeyboardButton("📧 Edit Email", callback_data=f"admin_edit_email_{user_id}")],
+        [InlineKeyboardButton("🎯 Edit Plan", callback_data=f"admin_edit_plan_{user_id}"),
+         InlineKeyboardButton("🔄 Reset Referral", callback_data=f"admin_reset_refcode_{user_id}")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"admin_user_profile_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text("✏️ **EDIT PROFILE**\n\nSelect field to edit:", reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def setup_name_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Setup name editing"""
+    user_data = db.get_user(user_id)
+    current_name = user_data[3] if user_data else 'N/A'
+    
+    context.user_data['edit_user_id'] = user_id
+    context.user_data['edit_field'] = 'name'
+    context.user_data['awaiting_user_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_profile_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"✏️ **EDIT USER NAME**\n\n"
+        f"**Current:** {current_name}\n\n"
+        f"Enter new full name:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+async def setup_email_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Setup email editing"""
+    user_data = db.get_user(user_id)
+    current_email = user_data[4] if user_data else 'N/A'
+    
+    context.user_data['edit_user_id'] = user_id
+    context.user_data['edit_field'] = 'email'
+    context.user_data['awaiting_user_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_profile_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"📧 **EDIT EMAIL**\n\n**Current:** {current_email}\n\nEnter new email:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def show_plan_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Show plan editing menu"""
+    keyboard = [
+        [InlineKeyboardButton("🥉 Core Plan", callback_data=f"admin_set_plan_{user_id}_CORE")],
+        [InlineKeyboardButton("🥈 Growth Plan", callback_data=f"admin_set_plan_{user_id}_GROWTH")],
+        [InlineKeyboardButton("🥇 Alpha Plan", callback_data=f"admin_set_plan_{user_id}_ALPHA")],
+        [InlineKeyboardButton("❌ Remove Plan", callback_data=f"admin_set_plan_{user_id}_NONE")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"admin_edit_profile_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text("🎯 **EDIT PLAN**\n\nSelect plan:", reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def reset_referral_code(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Reset referral code"""
+    new_code = f"AV{user_id}{random.randint(100, 999)}"
+    
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('UPDATE users SET referral_code = ? WHERE user_id = ?', (new_code, user_id))
+        conn.commit()
+    
+    log_admin_action(
+        admin_id=update.callback_query.from_user.id,
+        action_type="referral_reset",
+        target_user_id=user_id,
+        notes=f"New code: {new_code}"
+    )
+    
+    await update.callback_query.message.edit_text(
+        f"🔄 **REFERRAL RESET**\n\n✅ New code: `{new_code}`",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Profile", callback_data=f"admin_user_profile_{user_id}")]]),
+        parse_mode='Markdown'
+    )
+
+async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, page: int = 0):
+    """Paged stock selection menu"""
+    user = db.get_user(user_id)
+    if not user:
+        await update.callback_query.message.edit_text("❌ User not found.")
+        return
+
+    username = user[1] if user[1] else str(user_id)
+
+    # Pagination
+    per_page = 8  # Show more tickers per page
+    start = page * per_page
+    end = start + per_page
+    page_stocks = ALL_STOCKS[start:end]
+
+    keyboard = []
+    for i in range(0, len(page_stocks), 2):
+        row = []
+        row.append(InlineKeyboardButton(
+            page_stocks[i], 
+            callback_data=f"admin_add_stock_ticker_{page_stocks[i]}_{user_id}"
+        ))
+        if i + 1 < len(page_stocks):
+            row.append(InlineKeyboardButton(
+                page_stocks[i + 1], 
+                callback_data=f"admin_add_stock_ticker_{page_stocks[i + 1]}_{user_id}"
+            ))
+        keyboard.append(row)
+
+    # Navigation buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_add_stock_page_{user_id}_{page-1}"))
+    if end < len(ALL_STOCKS):
+        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_add_stock_page_{user_id}_{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
+        # Cancel button
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    total_pages = (len(ALL_STOCKS) + per_page - 1) // per_page
+    await update.callback_query.message.edit_text(
+        f"📈 **ADD MANUAL STOCK**\n\n"
+        f"**User:** @{username}\n"
+        f"**Page:** {page + 1} of {total_pages}\n"
+        f"**Available Stocks:** {len(ALL_STOCKS)}\n\n"
+        f"Select a stock ticker:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def setup_add_investment(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Setup manual crypto investment addition by an admin."""
+    user = db.get_user(user_id)
+    if not user:
+        await update.callback_query.message.edit_text("❌ User not found.")
+        return
+
+    # Start the conversation to gather investment details
+    context.user_data['manual_investment'] = {
+        'user_id': user_id,
+        'username': user[1],
+        'step': 'amount'
+    }
+    context.user_data['awaiting_manual_investment'] = True
+
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"💰 **MANUAL CRYPTO INVESTMENT**\n\n"
+        f"Adding investment for: @{user[1]} (ID: {user_id})\n\n"
+        f"**Step 1 of 3: Amount**\n"
+        f"Please enter the investment amount in USD (e.g., 500.75):",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def setup_investment_amount_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, inv_id: int):
+    """Setup investment amount editing"""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id, amount FROM investments WHERE id = ?', (inv_id,))
+        result = cursor.fetchone()
+    
+    if not result:
+        await update.callback_query.message.edit_text("❌ Investment not found.")
+        return
+    
+    user_id, current_amount = result
+    
+    context.user_data['investment_edit_data'] = {
+        'investment_id': inv_id,
+        'user_id': user_id,
+        'field': 'amount'
+    }
+    context.user_data['awaiting_investment_edit'] = True
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancel", callback_data=f"admin_edit_inv_{inv_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"💰 **EDIT INVESTMENT AMOUNT**\n\n"
+        f"**Current Amount:** ${current_amount:,.2f}\n\n"
+        f"Enter the new investment amount:\n\n"
+        f"**Examples:**\n"
+        f"• 1000\n"
+        f"• 5500.50\n"
+        f"• 25000\n\n"
+        f"Type the new amount below:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
 
 # Command handlers for direct admin commands
 async def confirm_investment_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1661,3 +2083,63 @@ async def confirm_withdrawal_command(update: Update, context: ContextTypes.DEFAU
     
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Invalid command format. Use: /confirm_withdrawal <user_id>")
+
+async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin's input during the manual stock creation process."""
+    if not context.user_data.get('awaiting_manual_stock'):
+        return
+
+    data = context.user_data['manual_stock']
+    user_id = data['user_id']
+    step = data['step']
+    text = update.message.text.strip()
+    
+    try:
+        if step == 'amount':
+            amount = float(text)
+            if amount <= 0:
+                raise ValueError("Amount must be positive.")
+            data['amount'] = amount
+            data['step'] = 'price'
+            
+            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")]]
+            await update.message.reply_text(
+                f"✅ Amount set to ${amount:,.2f}\n\n"
+                f"**Step 3 of 3: Purchase Price**\n"
+                f"Enter the purchase price per share (e.g., 175.25):",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+
+        elif step == 'price':
+            price = float(text)
+            if price <= 0:
+                raise ValueError("Price must be positive.")
+            data['price'] = price
+            
+            # Calculate shares
+            shares = data['amount'] / price
+            data['shares'] = shares
+            
+            # Final confirmation step
+            keyboard = [[
+                InlineKeyboardButton("✅ Confirm & Add", callback_data="admin_confirm_manual_stock"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                f"**CONFIRM STOCK INVESTMENT**\n\n"
+                f"**User:** @{data.get('username', 'N/A')} (ID: {user_id})\n"
+                f"**Ticker:** {data['ticker']}\n"
+                f"**Amount Invested:** ${data['amount']:,.2f}\n"
+                f"**Purchase Price:** ${data['price']:,.2f}\n"
+                f"**Shares:** {shares:.4f}\n\n"
+                f"Please confirm to add this stock investment.",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            context.user_data.pop('awaiting_manual_stock', None)
+
+    except (ValueError, TypeError) as e:
+        await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")       

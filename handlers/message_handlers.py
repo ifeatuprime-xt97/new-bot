@@ -1394,3 +1394,69 @@ async def handle_wallet_address(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except Exception as e:
             logging.error(f"Failed to notify admin {admin_id} about stock sale: {e}")
+
+# Add this handler to your message processing logic
+async def handle_manual_investment_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles the admin's input during the manual investment creation process."""
+    if 'manual_investment' not in context.user_data:
+        return
+
+    data = context.user_data['manual_investment']
+    user_id = data['user_id']
+    step = data['step']
+    text = update.message.text
+    
+    try:
+        if step == 'amount':
+            amount = float(text)
+            if amount <= 0:
+                raise ValueError("Amount must be positive.")
+            data['amount'] = amount
+            data['step'] = 'crypto_type'
+            
+            await update.message.reply_text(
+                f"✅ Amount set to ${amount:,.2f}\n\n"
+                f"**Step 2 of 3: Crypto Type**\n"
+                f"Enter the cryptocurrency symbol (e.g., BTC, ETH, USDT):"
+            )
+
+        elif step == 'crypto_type':
+            crypto = text.strip().upper()
+            if not crypto or len(crypto) > 10:
+                raise ValueError("Invalid crypto symbol.")
+            data['crypto_type'] = crypto
+            data['step'] = 'plan'
+            
+            await update.message.reply_text(
+                f"✅ Crypto set to {crypto}\n\n"
+                f"**Step 3 of 3: Plan**\n"
+                f"Enter the investment plan (e.g., CORE, GROWTH, ALPHA):"
+            )
+
+        elif step == 'plan':
+            plan = text.strip().upper()
+            if not plan or len(plan) > 20:
+                raise ValueError("Invalid plan name.")
+            data['plan'] = plan
+            
+            # Final confirmation step
+            keyboard = [[
+                InlineKeyboardButton("✅ Confirm & Add", callback_data="admin_confirm_manual_investment"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                f"**CONFIRM INVESTMENT**\n\n"
+                f"**User:** @{data['username']} (ID: {user_id})\n"
+                f"**Amount:** ${data['amount']:,.2f}\n"
+                f"**Crypto:** {data['crypto_type']}\n"
+                f"**Plan:** {data['plan']}\n\n"
+                f"Please confirm to add this investment.",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            context.user_data.pop('awaiting_manual_investment', None)
+
+    except (ValueError, TypeError) as e:
+        await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")
