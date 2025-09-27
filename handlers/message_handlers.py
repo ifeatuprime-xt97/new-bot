@@ -6,12 +6,10 @@ import asyncio
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-
 from .utils import log_admin_action
 from config import ADMIN_USER_IDS
 from database import db
 from handlers.user_handlers import show_main_menu
-import asyncio
 
 async def schedule_message_deletion(context, chat_id, message_id, delay_seconds=120):
     """Schedule a message for deletion after delay"""
@@ -1147,165 +1145,6 @@ async def handle_broadcast_message_admin(update: Update, context: ContextTypes.D
         parse_mode='Markdown'
     )
 
-# Add these callback handlers to your existing admin_handlers.py
-
-async def handle_balance_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle balance change confirmation callback"""
-    confirmation_data = context.user_data.get('balance_confirmation')
-    if not confirmation_data:
-        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
-        return
-    
-    target_user_id = confirmation_data['target_user_id']
-    username = confirmation_data['username']
-    full_name = confirmation_data['full_name']
-    action = confirmation_data['action']
-    amount = confirmation_data['amount']
-    old_balance = confirmation_data['old_balance']
-    new_balance = confirmation_data['new_balance']
-    
-    admin_id = update.callback_query.from_user.id
-    
-    try:
-        # Update user balance in database
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE users SET current_balance = ? WHERE user_id = ?
-            ''', (new_balance, target_user_id))
-            conn.commit()
-        
-        # Log the admin action
-        log_admin_action(
-            admin_id=admin_id,
-            action_type=f"balance_{action.lower()}",
-            target_user_id=target_user_id,
-            amount=amount,
-            old_balance=old_balance,
-            new_balance=new_balance,
-            notes=f"Admin balance modification: {action}"
-        )
-        
-        # Send confirmation
-        await update.callback_query.message.edit_text(
-            f"✅ **BALANCE UPDATED SUCCESSFULLY**\n\n"
-            f"**User:** @{username} ({full_name or 'N/A'})\n"
-            f"**Action:** {action}\n"
-            f"**Amount:** ${amount:,.2f}\n"
-            f"**Previous Balance:** ${old_balance:,.2f}\n"
-            f"**New Balance:** ${new_balance:,.2f}\n\n"
-            f"✅ Change has been logged in admin records.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Edit Another Balance", callback_data="admin_edit_balance")],
-                [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
-            ]),
-            parse_mode='Markdown'
-        )
-        
-        # Notify the user about balance change
-        try:
-            if action == "ADD":
-                notification = f"🎉 **BALANCE UPDATED!**\n\n💰 ${amount:,.2f} has been added to your account!\n\nNew Balance: ${new_balance:,.2f}"
-            elif action == "SUBTRACT":
-                notification = f"ℹ️ **BALANCE UPDATED**\n\n💸 ${amount:,.2f} has been deducted from your account.\n\nNew Balance: ${new_balance:,.2f}"
-            elif action == "SET":
-                notification = f"ℹ️ **BALANCE UPDATED**\n\n💳 Your balance has been set to ${new_balance:,.2f}"
-            elif action == "RESET":
-                notification = f"ℹ️ **BALANCE RESET**\n\n💳 Your account balance has been reset to $0.00"
-            
-            await context.bot.send_message(
-                chat_id=target_user_id,
-                text=notification,
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            logging.error(f"Failed to notify user {target_user_id} about balance change: {e}")
-    
-    except Exception as e:
-        logging.error(f"Error updating user balance: {e}")
-        await update.callback_query.message.edit_text(
-            f"❌ **ERROR UPDATING BALANCE**\n\n{str(e)}\n\nPlease try again or contact technical support.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
-        )
-    
-    # Clean up
-    context.user_data.pop('balance_confirmation', None)
-
-async def handle_broadcast_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle broadcast confirmation callback"""
-    broadcast_message = context.user_data.get('broadcast_message')
-    if not broadcast_message:
-        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
-        return
-    
-    # Get all users
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT user_id FROM users')
-        users = cursor.fetchall()
-    
-    success_count = 0
-    total_users = len(users)
-    admin_id = update.callback_query.from_user.id
-    
-    # Update message to show progress
-    await update.callback_query.message.edit_text(
-        f"📢 **SENDING BROADCAST...**\n\n"
-        f"📤 Sending to {total_users} users...\n"
-        f"⏳ Please wait...",
-        parse_mode='Markdown'
-    )
-    
-    # Send broadcast message
-    for user_tuple in users:
-        try:
-            await context.bot.send_message(
-                chat_id=user_tuple[0],
-                text=f"📢 **ANNOUNCEMENT**\n\n{broadcast_message}",
-                parse_mode='Markdown'
-            )
-            success_count += 1
-            await asyncio.sleep(0.05)  # Rate limiting to avoid hitting limits
-        except Exception as e:
-            logging.error(f"Failed to send broadcast to {user_tuple[0]}: {e}")
-    
-    # Log the broadcast
-    log_admin_action(
-        admin_id=admin_id,
-        action_type="broadcast_message",
-        notes=f"Broadcast sent to {success_count}/{total_users} users"
-    )
-    
-    # Send completion message
-    await update.callback_query.message.edit_text(
-        f"✅ **BROADCAST COMPLETE!**\n\n"
-        f"📊 **Results:**\n"
-        f"• Total Users: {total_users}\n"
-        f"• Successfully Sent: {success_count}\n"
-        f"• Failed: {total_users - success_count}\n"
-        f"• Success Rate: {(success_count/total_users)*100:.1f}%\n\n"
-        f"✅ Broadcast has been logged in admin records.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Send Another", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
-        ]),
-        parse_mode='Markdown'
-    )
-    
-    # Clean up
-    context.user_data.pop('broadcast_message', None)
-
-# Update the main handle_admin_callback function to include new callbacks
-def update_admin_callback_handler():
-    """Add these cases to your existing handle_admin_callback function"""
-    # Add these cases to the existing function:
-    
-    # elif data == "admin_confirm_balance_change":
-    #     await handle_balance_confirmation_callback(update, context)
-    # elif data == "admin_confirm_broadcast":
-    #     await handle_broadcast_confirmation_callback(update, context)
-    
-    pass
 
 # Add this to the bottom of your message_handlers.py file
 async def handle_stock_sale(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
@@ -1461,23 +1300,6 @@ async def handle_manual_investment_input(update: Update, context: ContextTypes.D
     except (ValueError, TypeError) as e:
         await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")
 
-"""
-Message handlers - Updated to include admin text input routing
-"""
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from config import ADMIN_USER_IDS
-from database import db
-
-# Import admin handler functions
-from .admin_handlers import (
-    handle_manual_stock_input,
-    handle_stock_edit_input,
-    handle_balance_user_id_input,
-    log_admin_action
-)
-
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main text message handler - routes messages based on user state"""
     user_id = update.effective_user.id
@@ -1487,9 +1309,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id in ADMIN_USER_IDS:
         
         # Check if admin is adding manual stock (waiting for shares input)
-        if context.user_data.get('awaiting_manual_stock'):
-            await handle_manual_stock_input(update, context)
-            return
+        #if context.user_data.get('awaiting_manual_stock'):
+         #   await handle_manual_stock_input(update, context)
+          #  return
         
         # Check if admin is editing stock details
         if context.user_data.get('awaiting_stock_edit'):
@@ -1663,7 +1485,7 @@ async def handle_user_edit_input(update: Update, context: ContextTypes.DEFAULT_T
             
             conn.commit()
         
-        # Log the admin action
+        # Log the action
         log_admin_action(
             admin_id=update.effective_user.id,
             action_type=f"user_{field}_edit",
@@ -1715,12 +1537,7 @@ async def handle_balance_amount_input(update: Update, context: ContextTypes.DEFA
         
     except (ValueError, TypeError):
         await update.message.reply_text(
-            "Invalid amount format.\n\n"
-            "Valid formats:\n"
-            "• 1000\n"
-            "• 1500.50\n"
-            "• 25000\n\n"
-            "Please try again:"
+            "Invalid amount format. Please enter a valid number:"
         )
 
 
@@ -1758,8 +1575,8 @@ async def handle_manual_investment_input(update: Update, context: ContextTypes.D
             )
             context.user_data.pop('awaiting_manual_investment', None)
             
-    except (ValueError, TypeError):
-        await update.message.reply_text("Invalid amount format. Please enter a valid number:")
+    except (ValueError, TypeError) as e:
+        await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")
 
 
 async def handle_broadcast_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

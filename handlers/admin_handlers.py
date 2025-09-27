@@ -11,13 +11,7 @@ import functools
 from config import ADMIN_USER_IDS
 from database import db
 from .utils import log_admin_action
-
-from .message_handlers import (
-    confirm_balance_change,
-    handle_balance_confirmation_callback,
-    handle_broadcast_confirmation_callback,
-)
-
+from handlers.message_handlers import confirm_balance_change
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Main admin panel command"""
@@ -2112,6 +2106,165 @@ async def show_balance_history(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await update.callback_query.message.edit_text(text.strip(), reply_markup=reply_markup, parse_mode='Markdown')
 
+async def handle_balance_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle balance change confirmation callback"""
+    confirmation_data = context.user_data.get('balance_confirmation')
+    if not confirmation_data:
+        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
+        return
+    
+    target_user_id = confirmation_data['target_user_id']
+    username = confirmation_data['username']
+    full_name = confirmation_data['full_name']
+    action = confirmation_data['action']
+    amount = confirmation_data['amount']
+    old_balance = confirmation_data['old_balance']
+    new_balance = confirmation_data['new_balance']
+    
+    admin_id = update.callback_query.from_user.id
+    
+    try:
+        # Update user balance in database
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users SET current_balance = ? WHERE user_id = ?
+            ''', (new_balance, target_user_id))
+            conn.commit()
+        
+        # Log the admin action
+        log_admin_action(
+            admin_id=admin_id,
+            action_type=f"balance_{action.lower()}",
+            target_user_id=target_user_id,
+            amount=amount,
+            old_balance=old_balance,
+            new_balance=new_balance,
+            notes=f"Admin balance modification: {action}"
+        )
+        
+        # Send confirmation
+        await update.callback_query.message.edit_text(
+            f"✅ **BALANCE UPDATED SUCCESSFULLY**\n\n"
+            f"**User:** @{username} ({full_name or 'N/A'})\n"
+            f"**Action:** {action}\n"
+            f"**Amount:** ${amount:,.2f}\n"
+            f"**Previous Balance:** ${old_balance:,.2f}\n"
+            f"**New Balance:** ${new_balance:,.2f}\n\n"
+            f"✅ Change has been logged in admin records.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Edit Another Balance", callback_data="admin_edit_balance")],
+                [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+            ]),
+            parse_mode='Markdown'
+        )
+        
+        # Notify the user about balance change
+        try:
+            if action == "ADD":
+                notification = f"🎉 **BALANCE UPDATED!**\n\n💰 ${amount:,.2f} has been added to your account!\n\nNew Balance: ${new_balance:,.2f}"
+            elif action == "SUBTRACT":
+                notification = f"ℹ️ **BALANCE UPDATED**\n\n💸 ${amount:,.2f} has been deducted from your account.\n\nNew Balance: ${new_balance:,.2f}"
+            elif action == "SET":
+                notification = f"ℹ️ **BALANCE UPDATED**\n\n💳 Your balance has been set to ${new_balance:,.2f}"
+            elif action == "RESET":
+                notification = f"ℹ️ **BALANCE RESET**\n\n💳 Your account balance has been reset to $0.00"
+            
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=notification,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Failed to notify user {target_user_id} about balance change: {e}")
+    
+    except Exception as e:
+        logging.error(f"Error updating user balance: {e}")
+        await update.callback_query.message.edit_text(
+            f"❌ **ERROR UPDATING BALANCE**\n\n{str(e)}\n\nPlease try again or contact technical support.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]])
+        )
+    
+    # Clean up
+    context.user_data.pop('balance_confirmation', None)
+
+async def handle_broadcast_confirmation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle broadcast confirmation callback"""
+    broadcast_message = context.user_data.get('broadcast_message')
+    if not broadcast_message:
+        await update.callback_query.message.edit_text("❌ Session expired. Please start over.")
+        return
+    
+    # Get all users
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT user_id FROM users')
+        users = cursor.fetchall()
+    
+    success_count = 0
+    total_users = len(users)
+    admin_id = update.callback_query.from_user.id
+    
+    # Update message to show progress
+    await update.callback_query.message.edit_text(
+        f"📢 **SENDING BROADCAST...**\n\n"
+        f"📤 Sending to {total_users} users...\n"
+        f"⏳ Please wait...",
+        parse_mode='Markdown'
+    )
+    
+    # Send broadcast message
+    for user_tuple in users:
+        try:
+            await context.bot.send_message(
+                chat_id=user_tuple[0],
+                text=f"📢 **ANNOUNCEMENT**\n\n{broadcast_message}",
+                parse_mode='Markdown'
+            )
+            success_count += 1
+            await asyncio.sleep(0.05)  # Rate limiting to avoid hitting limits
+        except Exception as e:
+            logging.error(f"Failed to send broadcast to {user_tuple[0]}: {e}")
+    
+    # Log the broadcast
+    log_admin_action(
+        admin_id=admin_id,
+        action_type="broadcast_message",
+        notes=f"Broadcast sent to {success_count}/{total_users} users"
+    )
+    
+    # Send completion message
+    await update.callback_query.message.edit_text(
+        f"✅ **BROADCAST COMPLETE!**\n\n"
+        f"📊 **Results:**\n"
+        f"• Total Users: {total_users}\n"
+        f"• Successfully Sent: {success_count}\n"
+        f"• Failed: {total_users - success_count}\n"
+        f"• Success Rate: {(success_count/total_users)*100:.1f}%\n\n"
+        f"✅ Broadcast has been logged in admin records.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Send Another", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("🔙 Admin Panel", callback_data="admin_panel")]
+        ]),
+        parse_mode='Markdown'
+    )
+    
+    # Clean up
+    context.user_data.pop('broadcast_message', None)
+
+# Update the main handle_admin_callback function to include new callbacks
+def update_admin_callback_handler():
+    """Add these cases to your existing handle_admin_callback function"""
+    # Add these cases to the existing function:
+    
+    # elif data == "admin_confirm_balance_change":
+
+    #     await handle_balance_confirmation_callback(update, context)
+    # elif data == "admin_confirm_broadcast":
+    #     await handle_broadcast_confirmation_callback(update, context)
+    
+    pass
+
 async def handle_user_management_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
     """Handle user management callbacks"""
     action = data.replace("admin_user_", "")
@@ -2324,7 +2477,96 @@ async def reset_referral_code(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Profile", callback_data=f"admin_user_profile_{user_id}")]]),
         parse_mode='Markdown'
     )
+async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text input for manual stock addition by admin"""
+    if not context.user_data.get('awaiting_manual_stock'):
+        return
 
+    if update.effective_user.id not in ADMIN_USER_IDS:
+        return
+
+    stock_data = context.user_data.get('manual_stock')
+    if not stock_data:
+        await update.message.reply_text("Stock data not found. Please start the stock addition process again.")
+        context.user_data.pop('awaiting_manual_stock', None)
+        return
+
+    step = stock_data.get('step')
+    user_input = update.message.text.strip()
+    
+    if step == 'shares':
+        try:
+            # Parse the number of shares
+            shares = float(user_input.replace(',', ''))
+            if shares <= 0:
+                await update.message.reply_text(
+                    "Invalid input. Number of shares must be greater than 0.\n\n"
+                    "Please enter a valid number of shares:"
+                )
+                return
+
+            # Get stock details
+            user_id = stock_data['user_id']
+            username = stock_data['username']
+            ticker = stock_data['ticker']
+            current_price = stock_data['current_price']
+            
+            # Calculate total cost
+            total_cost = shares * current_price
+            
+            # Update stock data
+            stock_data['shares'] = shares
+            stock_data['total_cost'] = total_cost
+
+            # Create confirmation keyboard
+            keyboard = [
+                [InlineKeyboardButton("Confirm Purchase", callback_data="admin_confirm_stock_purchase")],
+                [InlineKeyboardButton("Change Shares", callback_data=f"admin_select_stock_{ticker}_{user_id}")],
+                [InlineKeyboardButton("Choose Different Stock", callback_data=f"admin_add_stock_{user_id}")],
+                [InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            # Show confirmation message
+            await update.message.reply_text(
+                f"**CONFIRM STOCK PURCHASE**\n\n"
+                f"**User:** @{username}\n"
+                f"**Stock:** {ticker.upper()}\n\n"
+                f"**Purchase Details:**\n"
+                f"• **Shares:** {shares:,.4f}\n"
+                f"• **Price per Share:** ${current_price:,.2f}\n"
+                f"• **Total Cost:** ${total_cost:,.2f}\n\n"
+                f"**Step 4: Final Confirmation**\n"
+                f"Review the details above and choose an option:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+
+            # Remove awaiting flag since we're now in confirmation mode
+            context.user_data.pop('awaiting_manual_stock', None)
+
+        except (ValueError, TypeError):
+            await update.message.reply_text(
+                "Invalid format. Please enter a valid number.\n\n"
+                "**Valid formats:**\n"
+                "• 10 (whole shares)\n"
+                "• 5.5 (fractional shares)\n"
+                "• 100.25 (fractional shares)\n\n"
+                "Please try again:"
+            )
+            return
+    
+    else:
+        # Unexpected step - reset the process
+        await update.message.reply_text(
+            "Unexpected input state. Please start the stock addition process again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Start Over", callback_data=f"admin_add_stock_{stock_data['user_id']}")]
+            ])
+        )
+        context.user_data.pop('manual_stock', None)
+        context.user_data.pop('awaiting_manual_stock', None)
+        
 async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Show Tech/Non-Tech categories for stock selection"""
     user = db.get_user(user_id)
@@ -2662,35 +2904,6 @@ async def handle_stock_purchase_confirmation(update: Update, context: ContextTyp
         )
     finally:
         # Clean up context data
-        context.user_data.pop('manual_stock', None)
-        context.user_data.pop('awaiting_manual_stock', None)
-
-
-# Main text input handler
-async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Route manual stock input to appropriate handler"""
-    if not context.user_data.get('awaiting_manual_stock'):
-        return
-
-    if update.effective_user.id not in ADMIN_USER_IDS:
-        return
-
-    stock_data = context.user_data.get('manual_stock')
-    if not stock_data:
-        return
-
-    step = stock_data.get('step')
-    
-    if step == 'shares':
-        await handle_shares_input(update, context)
-    else:
-        # Reset if in unexpected state
-        await update.message.reply_text(
-            "Unexpected state. Please start the stock addition process again.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔄 Start Over", callback_data=f"admin_add_stock_{stock_data['user_id']}")]
-            ])
-        )
         context.user_data.pop('manual_stock', None)
         context.user_data.pop('awaiting_manual_stock', None)
 

@@ -1,5 +1,5 @@
 """
-Main bot application
+Main bot application - Fixed version
 """
 import logging
 from datetime import time
@@ -8,10 +8,9 @@ from telegram.request import HTTPXRequest
 
 from config import BOT_TOKEN, ADMIN_USER_IDS
 from handlers.user_handlers import start_command, portfolio_command, calculate_user_profits
-from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command, handle_manual_stock_input,  handle_stock_edit_input
+from handlers.admin_handlers import admin_command, confirm_investment_command, confirm_withdrawal_command
 from handlers.callback_handlers import handle_callback_query
 from handlers.message_handlers import handle_text_message
-
 
 # Configure logging
 logging.basicConfig(
@@ -36,7 +35,7 @@ async def error_handler(update, context):
 async def unknown_command(update, context):
     """Handle unknown commands"""
     await update.message.reply_text(
-        "❌ Unknown command. Use /start for the main menu or click a button from the keyboard."
+        "Unknown command. Use /start for the main menu or click a button from the keyboard."
     )
 
 def main():
@@ -49,7 +48,7 @@ def main():
         pool_timeout=30.0
     )
 
-    # Build application (must be created before adding handlers)
+    # Build application
     application = Application.builder().token(BOT_TOKEN).request(request).build()
 
     # Add error handler
@@ -62,28 +61,13 @@ def main():
     application.add_handler(CommandHandler("confirm_investment", confirm_investment_command))
     application.add_handler(CommandHandler("confirm_withdrawal", confirm_withdrawal_command))
 
-    # Admin-only text handler (specific) - register before general text handlers
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS),
-        handle_stock_edit_input
-    ))
-
-    # Admin manual stock input (specific)
-    application.add_handler(MessageHandler(
-    filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS), 
-    handle_stock_edit_input
-    ))
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS), 
-        handle_manual_stock_input
-    ))
-
-    # Callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
+    # IMPORTANT: Single callback handler for all callbacks
     application.add_handler(CallbackQueryHandler(handle_callback_query))
 
-    # General message handlers (user-facing)
+    # IMPORTANT: Single text handler that routes to appropriate functions
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    
+    # Unknown command handler
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     # Schedule daily profit calculation at midnight UTC
@@ -97,21 +81,27 @@ def main():
     try:
         from database import db
         logger.info("Database initialized successfully")
+        
+        # Check admin table exists
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='admin_balance_logs';")
+            result = cursor.fetchone()
+            logger.info(f"Admin balance logs table exists: {result is not None}")
+            
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
+        return
 
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='admin_balance_logs';")
-        result = cursor.fetchone()
-        print("Admin table exists:", result is not None)
-
+    logger.info("Bot started successfully!")
+    
     # Start bot
-    application.run_polling(allowed_updates=["message", "callback_query"])
-
-    print("🎉 Admin system integration complete!")
-    print("📝 Follow the step-by-step guide above to integrate all components")
-    print("🧪 Test each feature thoroughly before deploying to production")
+    try:
+        application.run_polling(allowed_updates=["message", "callback_query"])
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot error: {e}")
 
 if __name__ == '__main__':
     main()
