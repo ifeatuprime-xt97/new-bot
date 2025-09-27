@@ -56,8 +56,14 @@ WALLET_ADDRESSES = {
 }
 
 # Stock Lists
-TECH_STOCKS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'NFLX', 'INTC', 'AMD']
-NON_TECH_STOCKS = ['V', 'JPM', 'JNJ', 'WMT', 'PG', 'MA', 'HD', 'UNH', 'VZ', 'DIS']
+TECH_STOCKS = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX', 
+        'ADBE', 'CRM', 'ORCL', 'IBM', 'INTC', 'AMD', 'PYPL', 'ZOOM',
+        'UBER', 'LYFT', 'SNAP', 'TWTR', 'SPOT', 'SQ', 'SHOP', 'ROKU']
+NON_TECH_STOCKS = [
+    'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'JNJ', 'PFE', 'MRK',
+    'ABBV', 'TMO', 'UNH', 'CVS', 'WMT', 'TGT', 'COST', 'HD',
+    'LOW', 'MCD', 'SBUX', 'KO', 'PEP', 'NKE', 'DIS', 'XOM', 'CVX'
+]
 ALL_STOCKS = TECH_STOCKS + NON_TECH_STOCKS
 
 # Conversation States
