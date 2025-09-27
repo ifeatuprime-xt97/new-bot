@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any
 from contextlib import contextmanager
 
+
 class DatabaseManager:
     def __init__(self, db_path: str = 'trading_bot.db'):
         self.db_path = db_path
@@ -256,6 +257,35 @@ class DatabaseManager:
             logging.error(f"Error adding stock: {e}")
             return False
 
+    def add_manual_stock(self, admin_id, user_id, ticker, amount, price):
+        """Add manual stock investment by admin"""
+        try:
+            shares = amount / price if price > 0 else 0
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO stock_investments 
+                    (user_id, stock_ticker, amount_invested_usd, purchase_price, shares_owned, 
+                    investment_date, status, confirmed_by, confirmed_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    user_id, ticker, amount, price, shares,
+                    datetime.now().isoformat(), 'confirmed', admin_id, datetime.now().isoformat()
+                ))
+                
+                # Update user's total invested
+                cursor.execute('''
+                    UPDATE users 
+                    SET total_invested = total_invested + ?
+                    WHERE user_id = ?
+                ''', (amount, user_id))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            logging.error(f"Error adding manual stock: {e}")
+            return False
+
     def add_investment(self, user_id: int, amount: float, crypto_type: str, 
                       wallet_address: str, transaction_id: str, plan: str, notes: str = None) -> bool:
         """Add new investment record"""
@@ -373,6 +403,7 @@ class DatabaseManager:
             stats['pending_withdrawals'] = cursor.fetchone()[0]
             
             return stats
+        
         def add_manual_stock(self, admin_id, user_id, ticker, amount, price):
             """Add manual stock investment by admin"""
             try:

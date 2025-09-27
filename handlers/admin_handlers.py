@@ -206,27 +206,7 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
         elif data.startswith("admin_edit_user_balance_"):
             user_id = int(data.split("_")[-1])
             await setup_user_balance_edit(update, context, user_id)
-        elif data.startswith("admin_add_stock_ticker_"):
-            parts = data.split("_")
-            ticker = parts[4]
-            user_id = int(parts[5])
-
-            # Store state
-            context.user_data['manual_stock'] = {
-                'user_id': user_id,
-                'ticker': ticker,
-                'step': 'amount'
-            }
-
-            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")]]
-            await update.callback_query.message.edit_text(
-                f"💰 **ADD STOCK**\n\n"
-                f"✅ Selected: {ticker}\n\n"
-                f"Step 2 of 3: Enter the amount (USD) to invest:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
-
+        # Investment addition steps
         elif data.startswith("admin_add_stock_ticker_"):
             parts = data.split("_")
             ticker = parts[4]
@@ -274,44 +254,35 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data.pop('manual_investment', None)
 
         elif data.startswith("admin_add_stock_page_"):
+            try:
+                parts = data.split("_")
+                print(f"DEBUG: Callback data: {data}")
+                print(f"DEBUG: Split parts: {parts}")
+                
+                if len(parts) >= 6:
+                    user_id = int(parts[4])
+                    page = int(parts[5])
+                    print(f"DEBUG: Parsed user_id={user_id}, page={page}")
+                    await setup_add_stock(update, context, user_id, page)
+                else:
+                    print(f"DEBUG: Not enough parts in callback data: {len(parts)}")
+                    await update.callback_query.message.edit_text("Error: Invalid pagination data")
+            except Exception as e:
+                print(f"DEBUG: Error in pagination handler: {e}")
+                await update.callback_query.message.edit_text(f"Error: {str(e)}")
+
+        
+        elif data.startswith("admin_stock_prev_"):
             parts = data.split("_")
-            # ["admin", "add", "stock", "page", "<user_id>", "<page>"]
-            user_id = int(parts[4])   # correct index for user_id
-            page = int(parts[5])      # correct index for page
+            user_id = int(parts[3])
+            page = int(parts[4])
             await setup_add_stock(update, context, user_id, page)
 
-
-        elif data.startswith("admin_add_stock_ticker_"):
+        elif data.startswith("admin_stock_next_"):
             parts = data.split("_")
-            # ["admin", "add", "stock", "ticker", "<ticker>", "<user_id>"]
-            ticker = parts[4]
-            user_id = int(parts[5])
-
-            # ✅ fetch realtime price from your API helper
-            try:
-                price = await get_realtime_price(ticker)   # <-- you should have this function already
-            except Exception as e:
-                await update.callback_query.message.edit_text(
-                    f"❌ Could not fetch price for {ticker}. Error: {e}"
-                )
-                return
-
-            amount = 1  # default amount (or however you want to define it)
-
-            # ✅ Save to DB
-            db.add_stock(user_id, ticker, amount, price)
-
-            # ✅ Confirmation message
-            keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
-            await update.callback_query.message.edit_text(
-                f"✅ Stock added successfully!\n\n"
-                f"📊 Ticker: {ticker}\n"
-                f"💵 Current Price: ${price:,.2f}\n"
-                f"📈 Amount: {amount}",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
-
+            user_id = int(parts[3])
+            page = int(parts[4])
+            await setup_add_stock(update, context, user_id, page)
 
                 # Add this elif block to your handle_admin_callback function
         elif data == "admin_confirm_manual_stock":
@@ -334,7 +305,12 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👤 View Profile", callback_data=f"admin_user_profile_{stock_data['user_id']}")]]))
                 
             except Exception as e:
-                await update.callback_query.message.edit_text(f"❌ Failed to add stock: {e}")
+                logging.error(f"Admin callback error for '{data}': {e}")
+                logging.error(f"Full traceback: ", exc_info=True)  # Add this line
+                await update.callback_query.message.edit_text(
+                    f"Error processing admin action: {str(e)}\n\nCallback data: {data}",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Admin Panel", callback_data="admin_panel")]])
+                )
             
             context.user_data.pop('manual_stock', None)
 
@@ -387,107 +363,102 @@ async def setup_profit_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         parse_mode='Markdown'
     )
 
-async def show_user_investments_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Show a user's crypto investments for editing."""
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, amount, crypto_type, status FROM investments WHERE user_id = ? ORDER BY investment_date DESC', (user_id,))
-        investments = cursor.fetchall()
-
-    if not investments:
-        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
-        await update.callback_query.message.edit_text("This user has no crypto investments.", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    text = "📝 **EDIT USER INVESTMENTS**\n\nSelect an investment to manage:\n\n"
-    keyboard = []
-    for inv_id, amount, crypto, status in investments:
-        text += f"• ID {inv_id}: ${amount:,.2f} ({crypto}) - {status.title()}\n"
-        keyboard.append([InlineKeyboardButton(f"Edit Investment #{inv_id}", callback_data=f"admin_edit_inv_{inv_id}")])
-
-    keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
 async def show_user_stocks_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Show a user's stock investments for editing."""
-    with db.get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, amount_invested_usd, stock_ticker, purchase_price, shares_owned, status, investment_date
-            FROM stock_investments 
-            WHERE user_id = ? 
-            ORDER BY investment_date DESC
-        ''', (user_id,))
-        cursor.execute("PRAGMA table_info(stock_investments)")
-        columns = [row[1] for row in cursor.fetchall()]
+    try:
+        user_data = db.get_user(user_id)
+        if not user_data:
+            await update.callback_query.message.edit_text("❌ User not found.")
+            return
+            
+        username = user_data[1] if user_data else str(user_id)
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Simple query that should work with any stock_investments table structure
+            try:
+                cursor.execute('''
+                    SELECT id, amount_invested_usd, stock_ticker, purchase_price, 
+                           COALESCE(shares_owned, 1.0) as shares_owned, 
+                           COALESCE(status, 'confirmed') as status, 
+                           investment_date
+                    FROM stock_investments 
+                    WHERE user_id = ? 
+                    ORDER BY investment_date DESC
+                ''', (user_id,))
+                stocks = cursor.fetchall()
+            except Exception as e:
+                # Fallback query if the above fails
+                cursor.execute('''
+                    SELECT id, amount_invested_usd, stock_ticker, purchase_price
+                    FROM stock_investments 
+                    WHERE user_id = ? 
+                    ORDER BY investment_date DESC
+                ''', (user_id,))
+                basic_stocks = cursor.fetchall()
+                # Convert to expected format
+                stocks = []
+                for stock in basic_stocks:
+                    stocks.append(stock + (1.0, 'confirmed', '2024-01-01'))
+
+        if not stocks:
+            keyboard = [
+                [InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")],
+                [InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+            ]
+            await update.callback_query.message.edit_text(
+                f"📊 **STOCK INVESTMENTS**\n\n"
+                f"**User:** @{username}\n\n"
+                f"This user has no stock investments.\n\n"
+                f"Click 'Add Stock Investment' to add one manually.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            return
+
+        text = f"📊 **EDIT USER STOCKS**\n\n**User:** @{username}\n\n"
+        keyboard = []
         
-        # Adjust query based on actual columns
-        if 'shares_owned' in columns:
-            cursor.execute('''
-                SELECT id, amount_invested_usd, stock_ticker, purchase_price, shares_owned, status, investment_date
-                FROM stock_investments 
-                WHERE user_id = ? 
-                ORDER BY investment_date DESC
-            ''', (user_id,))
-        else:
-            # Fallback if shares_owned doesn't exist
-            cursor.execute('''
-                SELECT id, amount_invested_usd, stock_ticker, purchase_price, 1.0 as shares_owned, status, investment_date
-                FROM stock_investments 
-                WHERE user_id = ? 
-                ORDER BY investment_date DESC
-            ''', (user_id,))
+        total_invested = 0
+        for i, stock in enumerate(stocks):
+            if len(stock) >= 4:  # Ensure we have at least the basic fields
+                stock_id, amount, ticker, price = stock[:4]
+                shares = stock[4] if len(stock) > 4 else 1.0
+                status = stock[5] if len(stock) > 5 else 'confirmed'
+                date = stock[6] if len(stock) > 6 else '2024-01-01'
+                
+                total_invested += amount
+                
+                text += f"**#{stock_id} - {ticker.upper()}**\n"
+                text += f"• Amount: ${amount:,.2f}\n"
+                text += f"• Price: ${price:,.2f}\n"
+                text += f"• Shares: {shares:.4f}\n"
+                text += f"• Status: {status.title()}\n"
+                text += f"• Date: {date[:10]}\n"
+                text += "─────────────────\n"
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"✏️ Edit {ticker.upper()}", 
+                    callback_data=f"admin_edit_stock_{stock_id}"
+                )])
 
-        stocks = cursor.fetchall()
+        text += f"\n**Total Stock Value:** ${total_invested:,.2f}"
+        
+        keyboard.append([InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
-    user_data = db.get_user(user_id)
-    username = user_data[1] if user_data else str(user_id)
-
-    if not stocks:
-        keyboard = [
-            [InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")],
-            [InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
-        ]
+    except Exception as e:
+        logging.error(f"Error in show_user_stocks_edit: {e}")
         await update.callback_query.message.edit_text(
-            f"📊 **STOCK INVESTMENTS**\n\n"
-            f"**User:** @{username}\n\n"
-            f"This user has no stock investments.\n\n"
-            f"Click 'Add Stock Investment' to add one manually.",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='Markdown'
+            f"❌ **Error loading stocks for user {user_id}**\n\n"
+            f"Error: {str(e)}\n\n"
+            f"Please check the database structure.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"admin_user_profile_{user_id}")]])
         )
-        return
-
-    text = f"📊 **EDIT USER STOCKS**\n\n**User:** @{username}\n\n"
-    keyboard = []
-    
-    total_invested = 0
-    for stock_id, amount, ticker, price, shares, status, date in stocks:
-        total_invested += amount
-        current_value = amount  # You might want to calculate real-time value here
-        
-        text += f"**#{stock_id} - {ticker.upper()}**\n"
-        text += f"• Amount: ${amount:,.2f}\n"
-        text += f"• Price: ${price:,.2f}\n"
-        text += f"• Shares: {shares:.4f}\n"
-        text += f"• Status: {status.title()}\n"
-        text += f"• Date: {date[:10]}\n"
-        text += "─────────────────\n"
-        
-        keyboard.append([InlineKeyboardButton(
-            f"✏️ Edit {ticker.upper()}", 
-            callback_data=f"admin_edit_stock_{stock_id}"
-        )])
-
-    text += f"\n**Total Stock Value:** ${total_invested:,.2f}"
-    
-    keyboard.append([InlineKeyboardButton("➕ Add Stock Investment", callback_data=f"admin_add_stock_{user_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
 
 async def show_user_transaction_history_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Display a user's full transaction history for an admin."""
@@ -704,6 +675,27 @@ async def setup_stock_amount_edit(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+async def show_user_investments_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """Show a user's crypto investments for editing."""
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, amount, crypto_type, status FROM investments WHERE user_id = ? ORDER BY investment_date DESC', (user_id,))
+        investments = cursor.fetchall()
+
+    if not investments:
+        keyboard = [[InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")]]
+        await update.callback_query.message.edit_text("This user has no crypto investments.", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    text = "📊 **EDIT USER INVESTMENTS**\n\nSelect an investment to manage:\n\n"
+    keyboard = []
+    for inv_id, amount, crypto, status in investments:
+        text += f"• ID {inv_id}: ${amount:,.2f} ({crypto}) - {status.title()}\n"
+        keyboard.append([InlineKeyboardButton(f"Edit Investment #{inv_id}", callback_data=f"admin_edit_inv_{inv_id}")])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def setup_stock_price_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
     """Setup stock price editing"""

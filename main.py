@@ -69,7 +69,15 @@ def main():
     ))
 
     # Admin manual stock input (specific)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_manual_stock_input))
+    application.add_handler(MessageHandler(
+    filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS), 
+    handle_stock_edit_input
+    ))
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_USER_IDS), 
+        handle_manual_stock_input
+    ))
 
     # Callback query handler - SINGLE HANDLER FOR ALL CALLBACKS
     application.add_handler(CallbackQueryHandler(handle_callback_query))
