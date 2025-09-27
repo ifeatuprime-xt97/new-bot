@@ -2694,6 +2694,46 @@ async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAUL
         context.user_data.pop('manual_stock', None)
         context.user_data.pop('awaiting_manual_stock', None)
 
+async def handle_manual_investment_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle manual investment input"""
+    if not context.user_data.get('awaiting_manual_investment'):
+        return
+        
+    investment_data = context.user_data.get('manual_investment')
+    if not investment_data:
+        return
+        
+    step = investment_data.get('step')
+    text = update.message.text.strip()
+    
+    try:
+        if step == 'amount':
+            amount = float(text.replace(',', '').replace('$', ''))
+            if amount <= 0:
+                raise ValueError("Amount must be positive")
+            
+            investment_data['amount'] = amount
+            investment_data['step'] = 'crypto_type'
+            
+            keyboard = [
+                [InlineKeyboardButton("Bitcoin (BTC)", callback_data="admin_crypto_btc")],
+                [InlineKeyboardButton("Ethereum (ETH)", callback_data="admin_crypto_eth")],
+                [InlineKeyboardButton("USDT", callback_data="admin_crypto_usdt")],
+                [InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{investment_data['user_id']}")]
+            ]
+            
+            await update.message.reply_text(
+                f"Amount set to ${amount:,.2f}\n\n"
+                f"Step 2 of 3: Choose cryptocurrency type:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            context.user_data.pop('awaiting_manual_investment', None)
+            
+    except (ValueError, TypeError) as e:
+        await update.message.reply_text(f"Invalid amount: {e}\nPlease try again:")
+
+
 
 async def setup_add_investment(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Setup manual crypto investment addition by an admin."""
