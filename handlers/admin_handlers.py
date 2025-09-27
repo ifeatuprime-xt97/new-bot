@@ -254,35 +254,13 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
             context.user_data.pop('manual_investment', None)
 
         elif data.startswith("admin_add_stock_page_"):
-            try:
-                parts = data.split("_")
-                print(f"DEBUG: Callback data: {data}")
-                print(f"DEBUG: Split parts: {parts}")
-                
-                if len(parts) >= 6:
-                    user_id = int(parts[4])
-                    page = int(parts[5])
-                    print(f"DEBUG: Parsed user_id={user_id}, page={page}")
-                    await setup_add_stock(update, context, user_id, page)
-                else:
-                    print(f"DEBUG: Not enough parts in callback data: {len(parts)}")
-                    await update.callback_query.message.edit_text("Error: Invalid pagination data")
-            except Exception as e:
-                print(f"DEBUG: Error in pagination handler: {e}")
-                await update.callback_query.message.edit_text(f"Error: {str(e)}")
-
-        
-        elif data.startswith("admin_stock_prev_"):
             parts = data.split("_")
-            user_id = int(parts[3])
-            page = int(parts[4])
+            ["admin", "add", "stock", "page", "<user_id>", "<page>"]
+            user_id = int(parts[4])   # correct index for user_id
+            page = int(parts[5])      # correct index for page
             await setup_add_stock(update, context, user_id, page)
 
-        elif data.startswith("admin_stock_next_"):
-            parts = data.split("_")
-            user_id = int(parts[3])
-            page = int(parts[4])
-            await setup_add_stock(update, context, user_id, page)
+
 
                 # Add this elif block to your handle_admin_callback function
         elif data == "admin_confirm_manual_stock":
@@ -696,7 +674,7 @@ async def show_user_investments_edit(update: Update, context: ContextTypes.DEFAU
     keyboard.append([InlineKeyboardButton("🔙 Back to Profile", callback_data=f"admin_user_profile_{user_id}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode='Markdown')
-
+    
 async def setup_stock_price_edit(update: Update, context: ContextTypes.DEFAULT_TYPE, stock_id: int):
     """Setup stock price editing"""
     with db.get_connection() as conn:
@@ -2352,30 +2330,45 @@ async def reset_referral_code(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, page: int = 0):
-    """Paged stock selection menu"""
+    """Improved paged stock selection menu with better navigation"""
     user = db.get_user(user_id)
     if not user:
-        await update.callback_query.message.edit_text("❌ User not found.")
+        await update.callback_query.message.edit_text("User not found.")
         return
 
     username = user[1] if user[1] else str(user_id)
 
-    # Pagination
-    per_page = 8  # Show more tickers per page
+    # Pagination settings
+    per_page = 10
     start = page * per_page
     end = start + per_page
     page_stocks = ALL_STOCKS[start:end]
 
+    if not page_stocks:
+        # Handle case where page is out of range
+        await update.callback_query.message.edit_text(
+            "No stocks found on this page.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("Back to Profile", callback_data=f"admin_user_profile_{user_id}")
+            ]])
+        )
+        return
+
+    # Build keyboard with stock options
     keyboard = []
+    
+    # Add stock buttons in rows of 2
     for i in range(0, len(page_stocks), 2):
         row = []
+        # First stock in row
         row.append(InlineKeyboardButton(
-            page_stocks[i], 
+            f"{page_stocks[i]}", 
             callback_data=f"admin_add_stock_ticker_{page_stocks[i]}_{user_id}"
         ))
+        # Second stock in row (if exists)
         if i + 1 < len(page_stocks):
             row.append(InlineKeyboardButton(
-                page_stocks[i + 1], 
+                f"{page_stocks[i + 1]}", 
                 callback_data=f"admin_add_stock_ticker_{page_stocks[i + 1]}_{user_id}"
             ))
         keyboard.append(row)
@@ -2383,27 +2376,346 @@ async def setup_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE, us
     # Navigation buttons
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_add_stock_page_{user_id}_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton(
+            "Previous", 
+            callback_data=f"admin_add_stock_page_{user_id}_{page-1}"
+        ))
     if end < len(ALL_STOCKS):
-        nav_buttons.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_add_stock_page_{user_id}_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton(
+            "Next", 
+            callback_data=f"admin_add_stock_page_{user_id}_{page+1}"
+        ))
+    
     if nav_buttons:
         keyboard.append(nav_buttons)
 
-        # Cancel button
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")])
+    # Add popular stocks section if on first page
+    if page == 0:
+        popular_stocks = ["AAPL", "GOOGL", "MSFT", "TSLA", "AMZN", "NVDA"]
+        if any(stock in ALL_STOCKS for stock in popular_stocks):
+            keyboard.append([InlineKeyboardButton("--- Popular Stocks ---", callback_data="separator")])
+            pop_row = []
+            for stock in popular_stocks[:4]:  # Show first 4 popular
+                if stock in ALL_STOCKS:
+                    pop_row.append(InlineKeyboardButton(
+                        f"{stock}", 
+                        callback_data=f"admin_add_stock_ticker_{stock}_{user_id}"
+                    ))
+                    if len(pop_row) == 2:
+                        keyboard.append(pop_row)
+                        pop_row = []
+            if pop_row:  # Add remaining popular stocks
+                keyboard.append(pop_row)
+
+    # Cancel button
+    keyboard.append([InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Calculate pagination info
     total_pages = (len(ALL_STOCKS) + per_page - 1) // per_page
+    showing_from = start + 1
+    showing_to = min(end, len(ALL_STOCKS))
+
     await update.callback_query.message.edit_text(
-        f"📈 **ADD MANUAL STOCK**\n\n"
+        f"**ADD MANUAL STOCK INVESTMENT**\n\n"
         f"**User:** @{username}\n"
         f"**Page:** {page + 1} of {total_pages}\n"
-        f"**Available Stocks:** {len(ALL_STOCKS)}\n\n"
-        f"Select a stock ticker:",
+        f"**Showing:** {showing_from}-{showing_to} of {len(ALL_STOCKS)} stocks\n\n"
+        f"**Step 1 of 4:** Select a stock ticker:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+async def handle_stock_ticker_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, ticker: str, user_id: int):
+    """Handle when admin selects a stock ticker - Step 1 complete, move to Step 2"""
+    user = db.get_user(user_id)
+    if not user:
+        await update.callback_query.message.edit_text("User not found.")
+        return
+
+    username = user[1] if user[1] else str(user_id)
+    
+    # Get current stock price
+    try:
+        current_price = await get_realtime_price(ticker)
+    except:
+        current_price = 100.0  # Fallback price
+
+    # Initialize manual stock data
+    context.user_data['manual_stock'] = {
+        'user_id': user_id,
+        'username': username,
+        'ticker': ticker,
+        'current_price': current_price,
+        'step': 'shares'
+    }
+    context.user_data['awaiting_manual_stock'] = True
+
+    keyboard = [
+        [InlineKeyboardButton("Choose Different Stock", callback_data=f"admin_add_stock_{user_id}")],
+        [InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.callback_query.message.edit_text(
+        f"**ADD STOCK INVESTMENT**\n\n"
+        f"**User:** @{username}\n"
+        f"**Selected Stock:** {ticker.upper()}\n"
+        f"**Current Price:** ${current_price:,.2f}\n\n"
+        f"**Step 2 of 4: Number of Shares**\n"
+        f"Enter the number of shares to purchase:\n\n"
+        f"**Examples:**\n"
+        f"• 10\n"
+        f"• 5.5\n"
+        f"• 100.25\n\n"
+        f"**Note:** You can enter whole numbers or decimals.",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def handle_stock_shares_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle shares input - Step 2 complete, move to Step 3"""
+    if not context.user_data.get('awaiting_manual_stock'):
+        return
+
+    if update.effective_user.id not in ADMIN_USER_IDS:
+        return
+
+    stock_data = context.user_data.get('manual_stock')
+    if not stock_data or stock_data['step'] != 'shares':
+        return
+
+    try:
+        shares = float(update.message.text.strip().replace(',', ''))
+        if shares <= 0:
+            await update.message.reply_text(
+                "**Invalid Number of Shares**\n\n"
+                "Number of shares must be greater than 0.\n"
+                "Please enter a valid number of shares:"
+            )
+            return
+
+        # Update stock data
+        stock_data['shares'] = shares
+        stock_data['step'] = 'review'
+
+        user_id = stock_data['user_id']
+        username = stock_data['username']
+        ticker = stock_data['ticker']
+        current_price = stock_data['current_price']
+        
+        # Calculate total cost
+        total_cost = shares * current_price
+        stock_data['total_cost'] = total_cost
+
+        keyboard = [
+            [InlineKeyboardButton("Confirm Purchase", callback_data="admin_confirm_stock_purchase")],
+            [InlineKeyboardButton("Change Shares", callback_data=f"admin_add_stock_ticker_{ticker}_{user_id}")],
+            [InlineKeyboardButton("Choose Different Stock", callback_data=f"admin_add_stock_{user_id}")],
+            [InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            f"**REVIEW STOCK PURCHASE**\n\n"
+            f"**User:** @{username}\n"
+            f"**Stock:** {ticker.upper()}\n\n"
+            f"**Step 3 of 4: Review Total Cost**\n"
+            f"• **Shares:** {shares:,.4f}\n"
+            f"• **Price per Share:** ${current_price:,.2f}\n"
+            f"• **Total Cost:** ${total_cost:,.2f}\n\n"
+            f"**Summary:**\n"
+            f"You are purchasing {shares:,.4f} shares of {ticker.upper()} "
+            f"at ${current_price:,.2f} per share for a total of ${total_cost:,.2f}.\n\n"
+            f"Click 'Confirm Purchase' to proceed to final confirmation.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+        # Update context to not expect more manual input for now
+        context.user_data.pop('awaiting_manual_stock', None)
+
+    except (ValueError, TypeError):
+        await update.message.reply_text(
+            "**Invalid Shares Format**\n\n"
+            "Please enter a valid number.\n\n"
+            "**Valid formats:**\n"
+            "• 10\n"
+            "• 5.5\n"
+            "• 100.25\n\n"
+            "Try again:"
+        )
+
+async def handle_stock_purchase_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show final confirmation - Step 4"""
+    stock_data = context.user_data.get('manual_stock')
+    if not stock_data:
+        await update.callback_query.message.edit_text("Stock data not found. Please start over.")
+        return
+
+    user_id = stock_data['user_id']
+    username = stock_data['username']
+    ticker = stock_data['ticker']
+    shares = stock_data['shares']
+    current_price = stock_data['current_price']
+    total_cost = stock_data['total_cost']
+
+    keyboard = [
+        [InlineKeyboardButton("YES - ADD TO PORTFOLIO", callback_data="admin_final_confirm_stock")],
+        [InlineKeyboardButton("No - Go Back", callback_data="admin_confirm_stock_purchase")],
+        [InlineKeyboardButton("Cancel", callback_data=f"admin_user_profile_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.callback_query.message.edit_text(
+        f"**FINAL CONFIRMATION**\n\n"
+        f"**Step 4 of 4: Confirm Addition**\n\n"
+        f"**USER DETAILS:**\n"
+        f"• User: @{username} (ID: {user_id})\n\n"
+        f"**INVESTMENT DETAILS:**\n"
+        f"• Stock: {ticker.upper()}\n"
+        f"• Shares: {shares:,.4f}\n"
+        f"• Price per Share: ${current_price:,.2f}\n"
+        f"• Total Investment: ${total_cost:,.2f}\n\n"
+        f"**IMPORTANT:**\n"
+        f"• This will be added as a CONFIRMED investment\n"
+        f"• User's total invested will increase by ${total_cost:,.2f}\n"
+        f"• This action cannot be undone\n\n"
+        f"Are you sure you want to add this stock investment?",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def handle_final_stock_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle final confirmation and add the stock to database"""
+    stock_data = context.user_data.get('manual_stock')
+    if not stock_data:
+        await update.callback_query.message.edit_text("Stock data not found. Please start over.")
+        return
+
+    try:
+        admin_id = update.callback_query.from_user.id
+        user_id = stock_data['user_id']
+        ticker = stock_data['ticker']
+        shares = stock_data['shares']
+        price = stock_data['current_price']
+        total_cost = stock_data['total_cost']
+
+        # Add stock investment to database
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Insert stock investment
+            cursor.execute('''
+                INSERT INTO stock_investments 
+                (user_id, stock_ticker, amount_invested_usd, purchase_price, shares_owned, 
+                 status, investment_date, confirmed_by, confirmed_date)
+                VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?, ?)
+            ''', (user_id, ticker.upper(), total_cost, price, shares, 
+                  datetime.now().isoformat(), admin_id, datetime.now().isoformat()))
+            
+            # Update user's total invested
+            cursor.execute('''
+                UPDATE users 
+                SET total_invested = total_invested + ?
+                WHERE user_id = ?
+            ''', (total_cost, user_id))
+            
+            conn.commit()
+            stock_id = cursor.lastrowid
+
+        # Log the admin action
+        log_admin_action(
+            admin_id=admin_id,
+            action_type="manual_stock_addition",
+            target_user_id=user_id,
+            notes=f"Added {ticker.upper()}: {shares:.4f} shares @ ${price:,.2f} = ${total_cost:,.2f}"
+        )
+
+        # Success message
+        keyboard = [
+            [InlineKeyboardButton("View All Stocks", callback_data=f"admin_edit_stocks_{user_id}")],
+            [InlineKeyboardButton("Add Another Stock", callback_data=f"admin_add_stock_{user_id}")],
+            [InlineKeyboardButton("Back to Profile", callback_data=f"admin_user_profile_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.callback_query.message.edit_text(
+            f"**STOCK INVESTMENT ADDED SUCCESSFULLY!**\n\n"
+            f"**Investment ID:** #{stock_id}\n"
+            f"**User:** @{stock_data['username']}\n"
+            f"**Stock:** {ticker.upper()}\n"
+            f"**Shares:** {shares:,.4f}\n"
+            f"**Price per Share:** ${price:,.2f}\n"
+            f"**Total Investment:** ${total_cost:,.2f}\n\n"
+            f"The stock investment has been added to the user's portfolio "
+            f"and their total invested amount has been updated.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+        # Try to notify the user
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"**NEW STOCK ADDED TO PORTFOLIO!**\n\n"
+                     f"**Stock:** {ticker.upper()}\n"
+                     f"**Shares:** {shares:,.4f}\n"
+                     f"**Total Investment:** ${total_cost:,.2f}\n"
+                     f"**Purchase Price:** ${price:,.2f} per share\n\n"
+                     f"Your stock has been added to your portfolio!\n"
+                     f"Check /portfolio to view your investments.",
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.warning(f"Could not notify user {user_id} about stock addition: {e}")
+
+    except Exception as e:
+        logging.error(f"Error adding manual stock: {e}")
+        await update.callback_query.message.edit_text(
+            f"**Error Adding Stock**\n\n"
+            f"An error occurred while adding the stock investment:\n"
+            f"`{str(e)}`\n\n"
+            f"Please try again or contact system administrator.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Try Again", callback_data=f"admin_add_stock_{stock_data['user_id']}")],
+                [InlineKeyboardButton("Back to Profile", callback_data=f"admin_user_profile_{stock_data['user_id']}")]
+            ]),
+            parse_mode='Markdown'
+        )
+    finally:
+        # Clean up context data
+        context.user_data.pop('manual_stock', None)
+        context.user_data.pop('awaiting_manual_stock', None)
+
+async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Main handler for manual stock input - routes to appropriate handler"""
+    if not context.user_data.get('awaiting_manual_stock'):
+        return
+
+    if update.effective_user.id not in ADMIN_USER_IDS:
+        return
+
+    stock_data = context.user_data.get('manual_stock')
+    if not stock_data:
+        return
+
+    step = stock_data.get('step')
+    
+    if step == 'shares':
+        await handle_stock_shares_input(update, context)
+    else:
+        # Unexpected step, reset
+        await update.message.reply_text(
+            "Unexpected input state. Please start the stock addition process again.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Start Over", callback_data=f"admin_add_stock_{stock_data['user_id']}")]
+            ])
+        )
+        context.user_data.pop('manual_stock', None)
+        context.user_data.pop('awaiting_manual_stock', None)
+
 
 async def setup_add_investment(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Setup manual crypto investment addition by an admin."""
@@ -2605,62 +2917,3 @@ async def confirm_withdrawal_command(update: Update, context: ContextTypes.DEFAU
     except (ValueError, IndexError):
         await update.message.reply_text("❌ Invalid command format. Use: /confirm_withdrawal <user_id>")
 
-async def handle_manual_stock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the admin's input during the manual stock creation process."""
-    if not context.user_data.get('awaiting_manual_stock'):
-        return
-
-    data = context.user_data['manual_stock']
-    user_id = data['user_id']
-    step = data['step']
-    text = update.message.text.strip()
-    
-    try:
-        if step == 'amount':
-            amount = float(text)
-            if amount <= 0:
-                raise ValueError("Amount must be positive.")
-            data['amount'] = amount
-            data['step'] = 'price'
-            
-            keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")]]
-            await update.message.reply_text(
-                f"✅ Amount set to ${amount:,.2f}\n\n"
-                f"**Step 3 of 3: Purchase Price**\n"
-                f"Enter the purchase price per share (e.g., 175.25):",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode='Markdown'
-            )
-
-        elif step == 'price':
-            price = float(text)
-            if price <= 0:
-                raise ValueError("Price must be positive.")
-            data['price'] = price
-            
-            # Calculate shares
-            shares = data['amount'] / price
-            data['shares'] = shares
-            
-            # Final confirmation step
-            keyboard = [[
-                InlineKeyboardButton("✅ Confirm & Add", callback_data="admin_confirm_manual_stock"),
-                InlineKeyboardButton("❌ Cancel", callback_data=f"admin_user_profile_{user_id}")
-            ]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-
-            await update.message.reply_text(
-                f"**CONFIRM STOCK INVESTMENT**\n\n"
-                f"**User:** @{data.get('username', 'N/A')} (ID: {user_id})\n"
-                f"**Ticker:** {data['ticker']}\n"
-                f"**Amount Invested:** ${data['amount']:,.2f}\n"
-                f"**Purchase Price:** ${data['price']:,.2f}\n"
-                f"**Shares:** {shares:.4f}\n\n"
-                f"Please confirm to add this stock investment.",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            context.user_data.pop('awaiting_manual_stock', None)
-
-    except (ValueError, TypeError) as e:
-        await update.message.reply_text(f"❌ Invalid input: {e}\nPlease try again.")       
